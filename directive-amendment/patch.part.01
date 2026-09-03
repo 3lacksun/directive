@@ -1,0 +1,97 @@
+-                        Text("DIRECTIVE • ${item.date}${item.plan?.scheduledStartLocal?.let { " • $it" } ?: " • Unscheduled"} • ${item.plan?.scheduledDurationMinutes ?: item.task.durationMinutes ?: 30}m", style = MaterialTheme.typography.bodySmall)
++                        Text("DIRECTIVE • ${formatDirectiveDate(item.date)}${item.plan?.scheduledStartLocal?.let { raw -> parseStoredLocalTime(raw)?.let { " • ${formatDirectiveTime(it)}" } } ?: " • Unscheduled"} • ${item.plan?.scheduledDurationMinutes ?: item.task.durationMinutes ?: 30}m", style = MaterialTheme.typography.bodySmall)
+                         if (conflict) Text("Conflict with an external calendar commitment", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                         TextButton(onClick = { onReschedule(item) }) { Text("Reschedule") }
+                     }
+@@ -414,20 +419,17 @@
+ 
+ @Composable
+ private fun RescheduleDialog(item: CalendarPlannerItem, onDismiss: () -> Unit, onConfirm: (LocalDate, LocalTime?) -> Unit) {
+-    var dateText by remember(item) { mutableStateOf(item.date.toString()) }
+-    var timeText by remember(item) { mutableStateOf(item.plan?.scheduledStartLocal.orEmpty()) }
+-    val date = runCatching { LocalDate.parse(dateText.trim()) }.getOrNull()
+-    val time = if (timeText.isBlank()) null else runCatching { LocalTime.parse(timeText.trim()) }.getOrNull()
+-    val valid = date != null && (timeText.isBlank() || time != null)
++    var date by remember(item) { mutableStateOf(item.date) }
++    var time by remember(item) { mutableStateOf(parseStoredLocalTime(item.plan?.scheduledStartLocal)) }
+     AlertDialog(
+         onDismissRequest = onDismiss,
+         title = { Text("Reschedule ${item.task.title}") },
+         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+-            OutlinedTextField(dateText, { dateText = it }, label = { Text("Date (YYYY-MM-DD)") }, singleLine = true)
+-            OutlinedTextField(timeText, { timeText = it }, label = { Text("Time (HH:MM, optional)") }, singleLine = true)
+-            Text("This accessible control provides the same reschedule capability without requiring drag gestures.", style = MaterialTheme.typography.bodySmall)
++            DirectiveDatePickerField("Date",date,{ selected -> selected?.let { date=it } },Modifier.fillMaxWidth(),allowClear=false)
++            DirectiveTimePickerField("Time",time,{ time=it },Modifier.fillMaxWidth(),allowClear=true)
++            Text("Date and time use native selectors; time is optional for an all-day placement.", style = MaterialTheme.typography.bodySmall)
+         } },
+-        confirmButton = { Button(enabled = valid, onClick = { onConfirm(requireNotNull(date), time) }) { Text("Move") } },
++        confirmButton = { Button(onClick = { onConfirm(date, time) }) { Text("Move") } },
+         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+     )
+ }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt	2026-09-02 15:49:48.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt	2026-09-03 18:10:01.826652996 +0000
+@@ -21,6 +21,8 @@
+ import dagger.hilt.android.lifecycle.HiltViewModel
+ import java.time.LocalDate
+ import java.time.LocalTime
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
+ import java.time.ZoneId
+ import java.util.UUID
+ import javax.inject.Inject
+@@ -238,6 +240,6 @@
+             updatedAt = now,
+         )
+         if (sourceDate == null || sourceDate == targetDate) planRepository.place(target) else planRepository.move(planTaskId, sourceDate, target)
+-        message.value = "${task.title} moved to $targetDate${time?.let { " at $it" } ?: ""}."
++        message.value = "${task.title} moved to ${formatDirectiveDate(targetDate)}${time?.let { " at ${formatDirectiveTime(it)}" } ?: ""}."
+     }
+ }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/plan/PlanScreen.kt source/app/src/main/kotlin/com/example/directive/feature/plan/PlanScreen.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/plan/PlanScreen.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/plan/PlanScreen.kt	2026-09-03 18:09:40.636248078 +0000
+@@ -12,6 +12,9 @@
+ import com.example.directive.data.database.entity.PlanEntryEntity
+ import com.example.directive.data.database.entity.TaskEntity
+ import com.example.directive.domain.planning.PlannedPlacement
++import com.example.directive.ui.components.DirectiveMinuteOfDayPickerField
++import com.example.directive.ui.components.formatDirectiveTime
++import com.example.directive.ui.components.parseStoredLocalTime
+ import java.time.LocalTime
+ 
+ @Composable
+@@ -90,7 +93,7 @@
+ @Composable private fun ExistingPlanCard(entry: PlanEntryEntity, task: TaskEntity?, vm: PlanViewModel) {
+     OutlinedCard(Modifier.fillMaxWidth()) {
+         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+-            Text("${entry.scheduledStartLocal ?: "Any time"} • ${task?.title ?: "Task"}")
++            Text("${entry.scheduledStartLocal?.let { raw -> parseStoredLocalTime(raw)?.let(::formatDirectiveTime) ?: raw } ?: "Any time"} • ${task?.title ?: "Task"}")
+             Text("${entry.planningSource.name.lowercase().replace('_',' ')} • order ${entry.manualOrder + 1}", style = MaterialTheme.typography.bodySmall)
+             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                 TextButton(onClick = { vm.shiftManualTime(entry, -15) }) { Text("15m earlier") }
+@@ -103,23 +106,20 @@
+ }
+ 
+ @Composable private fun ManualPlacementDialog(task: TaskEntity, initialMinute: Int, onDismiss: () -> Unit, onConfirm: (Int, Int) -> Unit) {
+-    var hourText by remember(task.id) { mutableStateOf((initialMinute / 60).toString().padStart(2, '0')) }
+-    var minuteText by remember(task.id) { mutableStateOf((initialMinute % 60).toString().padStart(2, '0')) }
+-    val hour = hourText.toIntOrNull(); val minute = minuteText.toIntOrNull(); val valid = hour != null && hour in 0..23 && minute != null && minute in 0..59
++    var minuteOfDay by remember(task.id) { mutableIntStateOf(initialMinute.coerceIn(0,1439)) }
+     AlertDialog(
+         onDismissRequest = onDismiss,
+         title = { Text("Place ${task.title}") },
+         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+-            OutlinedTextField(hourText, { hourText = it.filter(Char::isDigit).take(2) }, label = { Text("Hour 00–23") }, singleLine = true)
+-            OutlinedTextField(minuteText, { minuteText = it.filter(Char::isDigit).take(2) }, label = { Text("Minute 00–59") }, singleLine = true)
++            DirectiveMinuteOfDayPickerField("Placement time",minuteOfDay,{minuteOfDay=it},Modifier.fillMaxWidth())
+             Text("Manual placement always overrides generated suggestions.", style = MaterialTheme.typography.bodySmall)
+         } },
+-        confirmButton = { Button(enabled = valid, onClick = { onConfirm(requireNotNull(hour), requireNotNull(minute)) }) { Text("Place") } },
++        confirmButton = { Button(onClick = { onConfirm(minuteOfDay/60, minuteOfDay%60) }) { Text("Place") } },
+         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+     )
+ }
+ 
