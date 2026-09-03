@@ -1,2 +1,3 @@
-DIRECTIVE Android acceptance build trigger.
-Authoritative checkpoint: DIRECTIVE_REM002_AUDITSKILL_WRAPPER_AUTHENTICATED_SOURCE_CHECKPOINT_03092026035205.zip
+DIRECTIVE Android acceptance build retriggered after repository visibility changed to public.
+Timestamp: 03092026061600
+Purpose: allocate GitHub-hosted public runner and execute Android acceptance workflow.
