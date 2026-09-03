@@ -1,0 +1,80 @@
+ @Composable private fun Metric(label: String, value: String) { Column { Text(value, style = MaterialTheme.typography.titleSmall); Text(label, style = MaterialTheme.typography.labelSmall) } }
+ @Composable private fun PlacementCard(p: PlannedPlacement, onEditTask: (String) -> Unit) {
+-    ElevatedCard(onClick = { onEditTask(p.taskId) }, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { val t = LocalTime.of(p.startMinute/60,p.startMinute%60); Text("$t • ${p.title}"); Text("${p.durationMinutes}m • ${p.reason.name.lowercase().replace('_',' ')}", style = MaterialTheme.typography.bodySmall) } }
++    ElevatedCard(onClick = { onEditTask(p.taskId) }, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { val t = LocalTime.of(p.startMinute/60,p.startMinute%60); Text("${formatDirectiveTime(t)} • ${p.title}"); Text("${p.durationMinutes}m • ${p.reason.name.lowercase().replace('_',' ')}", style = MaterialTheme.typography.bodySmall) } }
+ }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt source/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt	2026-09-03 18:10:01.827107976 +0000
+@@ -18,6 +18,10 @@
+ import com.example.directive.domain.planning.*
+ import dagger.hilt.android.lifecycle.HiltViewModel
+ import java.time.*
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
++import com.example.directive.ui.components.formatDirectiveMinuteOfDay
++import com.example.directive.ui.components.parseStoredLocalTime
+ import java.util.UUID
+ import javax.inject.Inject
+ import kotlinx.coroutines.CancellationException
+@@ -142,7 +146,7 @@
+             val allDayStart=task.allDayStartDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+             val constraintDate=timedStart?.toLocalDate() ?: allDayStart
+             if(constraintDate!=null && constraintDate>s.targetDate) {
+-                ineligible += UnplacedCandidate(task.id,task.title,task.durationMinutes ?: s.settings.defaultDurationMinutes,"Task cannot start before $constraintDate")
++                ineligible += UnplacedCandidate(task.id,task.title,task.durationMinutes ?: s.settings.defaultDurationMinutes,"Task cannot start before ${formatDirectiveDate(constraintDate)}")
+                 return@mapNotNull null
+             }
+             val earliest=timedStart?.takeIf { it.toLocalDate()==s.targetDate }?.let { it.hour*60+it.minute }
+@@ -214,10 +218,10 @@
+         val timedStart=task.startAt?.let { Instant.ofEpochMilli(it).atZone(zone) }
+         val allDayStart=task.allDayStartDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+         val constraintDate=timedStart?.toLocalDate() ?: allDayStart
+-        if(constraintDate!=null && constraintDate>s.targetDate) { message.value="${task.title} cannot start before $constraintDate."; return@launch }
+-        if(timedStart?.toLocalDate()==s.targetDate && requestedMinute < timedStart.hour*60+timedStart.minute) { message.value="${task.title} cannot be placed before ${timedStart.toLocalTime().withSecond(0).withNano(0)}."; return@launch }
++        if(constraintDate!=null && constraintDate>s.targetDate) { message.value="${task.title} cannot start before ${formatDirectiveDate(constraintDate)}."; return@launch }
++        if(timedStart?.toLocalDate()==s.targetDate && requestedMinute < timedStart.hour*60+timedStart.minute) { message.value="${task.title} cannot be placed before ${formatDirectiveTime(timedStart.toLocalTime())}."; return@launch }
+         val timedDue=task.dueAt?.let { Instant.ofEpochMilli(it).atZone(zone) }
+-        if(timedDue?.toLocalDate()==s.targetDate && requestedMinute+duration > timedDue.hour*60+timedDue.minute) { message.value="${task.title} must finish by ${timedDue.toLocalTime().withSecond(0).withNano(0)}."; return@launch }
++        if(timedDue?.toLocalDate()==s.targetDate && requestedMinute+duration > timedDue.hour*60+timedDue.minute) { message.value="${task.title} must finish by ${formatDirectiveTime(timedDue.toLocalTime())}."; return@launch }
+         val date = s.targetDate.toString()
+         val now = System.currentTimeMillis()
+         val existing = planRepository.get(taskId, date)
+@@ -231,7 +235,7 @@
+         )
+         planRepository.place(entry)
+         preview.value = null
+-        message.value = "${task.title} placed at ${entry.scheduledStartLocal}."
++        message.value = "${task.title} placed at ${entry.scheduledStartLocal?.let(::parseStoredLocalTime)?.let(::formatDirectiveTime) ?: entry.scheduledStartLocal}."
+     }
+ 
+     fun shiftManualTime(entry: PlanEntryEntity, deltaMinutes: Int) = viewModelScope.launch {
+@@ -252,15 +256,15 @@
+             val timedStart=task.startAt?.let { Instant.ofEpochMilli(it).atZone(zone) }
+             val allDayStart=task.allDayStartDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+             val constraintDate=timedStart?.toLocalDate() ?: allDayStart
+-            if(constraintDate!=null && constraintDate>s.targetDate) { message.value="${task.title} cannot start before $constraintDate."; return@launch }
+-            if(timedStart?.toLocalDate()==s.targetDate && shiftedMinute < timedStart.hour*60+timedStart.minute) { message.value="${task.title} cannot be placed before ${timedStart.toLocalTime().withSecond(0).withNano(0)}."; return@launch }
++            if(constraintDate!=null && constraintDate>s.targetDate) { message.value="${task.title} cannot start before ${formatDirectiveDate(constraintDate)}."; return@launch }
++            if(timedStart?.toLocalDate()==s.targetDate && shiftedMinute < timedStart.hour*60+timedStart.minute) { message.value="${task.title} cannot be placed before ${formatDirectiveTime(timedStart.toLocalTime())}."; return@launch }
+             val timedDue=task.dueAt?.let { Instant.ofEpochMilli(it).atZone(zone) }
+-            if(timedDue?.toLocalDate()==s.targetDate && shiftedMinute+duration > timedDue.hour*60+timedDue.minute) { message.value="${task.title} must finish by ${timedDue.toLocalTime().withSecond(0).withNano(0)}."; return@launch }
++            if(timedDue?.toLocalDate()==s.targetDate && shiftedMinute+duration > timedDue.hour*60+timedDue.minute) { message.value="${task.title} must finish by ${formatDirectiveTime(timedDue.toLocalTime())}."; return@launch }
+         }
+         val shifted = LocalTime.of(shiftedMinute / 60, shiftedMinute % 60)
+         planRepository.place(entry.copy(scheduledStartLocal = shifted.toString(), planningSource = PlanningSource.MANUAL, updatedAt = System.currentTimeMillis()))
+         preview.value = null
+-        message.value="Plan time adjusted to $shifted."
++        message.value="Plan time adjusted to ${formatDirectiveMinuteOfDay(shifted)}."
+     }
+ 
+     fun moveOrder(entry: PlanEntryEntity, direction: Int) = viewModelScope.launch {
+@@ -277,7 +281,7 @@
+     fun undoAcceptedPlan() = viewModelScope.launch {
+         val snapshot = undoSnapshot ?: return@launch
+         if (snapshot.date != targetDate.value) {
+-            message.value = "Return to ${snapshot.date} to undo the accepted plan."
++            message.value = "Return to ${formatDirectiveDate(snapshot.date)} to undo the accepted plan."
+             return@launch
+         }
+         database.withTransaction {
