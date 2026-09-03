@@ -1,0 +1,196 @@
+name: DIRECTIVE EXEC002 Planner Amendments
+
+on:
+  push:
+    paths:
+      - '.github/workflows/directive-exec002-planner-amendments.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: directive-exec002-planner-amendments
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout amendment controls
+        uses: actions/checkout@v4
+
+      - name: Download exact tested V6 source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-final-exec002-convergence-v6
+          path: prior
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33747327046
+
+      - name: Verify baseline and apply locked amendment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-src artifact
+          test -f prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz
+          echo '8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb  prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz' | sha256sum -c -
+          cat directive-amendment/patch.part.* > artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch
+          echo 'a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb  artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch' | sha256sum -c -
+          tar -xzf prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz -C build-src
+          patch --dry-run -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_DRY_RUN.txt
+          patch -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_APPLY.txt
+          DT=build-src/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt
+          TASK=build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt
+          TVM=build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt
+          grep -Fq 'DateTimeFormatter.ofPattern("ddMMyyyy")' "$DT"
+          grep -Fq 'DateTimeFormatter.ofPattern("ssmmHH")' "$DT"
+          grep -Fq 'fun DirectiveDatePickerField' "$DT"
+          grep -Fq 'fun DirectiveTimePickerField' "$DT"
+          grep -Fq 'fun DirectiveMinuteOfDayPickerField' "$DT"
+          grep -Fq 'subtasks.forEach' "$TASK"
+          grep -Fq 'subtasksByParent' "$TVM"
+          ! grep -R -E 'Text\("(Date \(YYYY-MM-DD\)|Time \(HH:MM|Hour 00–23|Minute 00–59)' build-src/app/src/main/kotlin >/dev/null
+          {
+            echo 'BASELINE_SOURCE_SHA256=8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb'
+            echo 'AMENDMENT_PATCH_SHA256=a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb'
+            echo 'DATE_FORMAT=ddmmyyyy'
+            echo 'TIME_FORMAT=ssmmhh (24-hour HH implementation)'
+            echo 'DATE_TIME_ENTRY=NATIVE_MATERIAL3_PICKERS'
+            echo 'SUBTASKS=NESTED_UNDER_PARENT_TASKS'
+            echo 'STATIC_ACCEPTANCE=PASS'
+          } | tee artifact/AMENDMENT_ACCEPTANCE.txt
+          (cd build-src && find . -type f ! -path './.gradle/*' ! -path './app/build/*' ! -path './build/*' -print0 | sort -z | xargs -0 sha256sum) > artifact/AMENDED_SOURCE_SHA256SUMS.txt
+          tar --exclude='./.gradle' --exclude='./app/build' --exclude='./build' -czf artifact/DIRECTIVE_EXEC002_AMENDED_SOURCE.tar.gz -C build-src .
+          sha256sum artifact/DIRECTIVE_EXEC002_AMENDED_SOURCE.tar.gz | tee artifact/AMENDED_SOURCE_ARCHIVE_SHA256.txt
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+
+      - name: Install Android 17 API 37 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-37.0;google_apis;x86_64'
+          sdkmanager 'platform-tools' 'emulator' 'build-tools;37.0.0' 'platforms;android-37.0' "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-amended-api37 --package "$IMAGE"
+          printf '%s\n' "$IMAGE" > artifact/EMULATOR_PACKAGE.txt
+
+      - name: Unit tests lint debug AndroidTest and R8 release
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease 2>&1 | tee ../artifact/GRADLE_BUILD_LOG.txt
+
+      - name: Verify APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build-src/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=build-src/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          RELEASE_APK="$(find build-src/app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          BT="$ANDROID_HOME/build-tools/37.0.0"
+          test -f "$APK"; test -f "$TEST_APK"; test -f "$RELEASE_APK"
+          cp "$APK" artifact/DIRECTIVE-1.0.0-exec002-amended-debug.apk
+          cp "$TEST_APK" artifact/DIRECTIVE-1.0.0-exec002-amended-androidTest.apk
+          cp "$RELEASE_APK" artifact/DIRECTIVE-1.0.0-exec002-amended-release-unsigned.apk
+          "$BT/aapt" dump badging "$APK" > artifact/DEBUG_APK_BADGING.txt
+          "$BT/aapt" dump badging "$RELEASE_APK" > artifact/RELEASE_APK_BADGING.txt
+          grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/DEBUG_APK_BADGING.txt
+          grep -q "package: name='com.example.directive' versionCode='1' versionName='1.0.0'" artifact/RELEASE_APK_BADGING.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$APK" > artifact/DEBUG_ZIPALIGN.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$RELEASE_APK" > artifact/RELEASE_ZIPALIGN.txt
+          "$BT/apksigner" verify --verbose --print-certs "$APK" > artifact/DEBUG_APK_SIGNATURE.txt
+          unzip -t "$APK" > artifact/DEBUG_APK_ZIP_TEST.txt
+          unzip -t "$TEST_APK" > artifact/ANDROIDTEST_APK_ZIP_TEST.txt
+          unzip -t "$RELEASE_APK" > artifact/RELEASE_APK_ZIP_TEST.txt
+          sha256sum artifact/*.apk > artifact/APK_SHA256SUMS.txt
+
+      - name: Boot clean Android 17 API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-amended-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
+          test "$boot" = 1
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 37
+
+      - name: Clean install cold launch and core runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=artifact/DIRECTIVE-1.0.0-exec002-amended-debug.apk
+          TEST_APK=artifact/DIRECTIVE-1.0.0-exec002-amended-androidTest.apk
+          adb uninstall com.example.directive.debug >/dev/null 2>&1 || true
+          adb install "$APK" | tee artifact/CLEAN_INSTALL.txt
+          grep -q Success artifact/CLEAN_INSTALL.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n1 | tr -d '\r')"
+          test -n "$COMPONENT"; printf '%s\n' "$COMPONENT" > artifact/LAUNCH_COMPONENT.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/COLD_LAUNCH.txt
+          grep -q 'Status: ok' artifact/COLD_LAUNCH.txt
+          sleep 2
+          adb exec-out screencap -p > artifact/SCREENSHOT_TODAY.png
+          adb install "$TEST_APK" | tee artifact/ANDROIDTEST_INSTALL.txt
+          grep -q Success artifact/ANDROIDTEST_INSTALL.txt
+          adb shell pm grant com.example.directive.debug android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          adb shell pm list instrumentation | tr -d '\r' | tee artifact/INSTRUMENTATION_LIST.txt
+          RUNNER="$(awk '/\(target=com.example.directive.debug\)/ {v=$1; sub(/^instrumentation:/,"",v); print v; exit}' artifact/INSTRUMENTATION_LIST.txt)"
+          test -n "$RUNNER"; printf '%s\n' "$RUNNER" > artifact/INSTRUMENTATION_COMPONENT.txt
+          CORE='com.example.directive.DirectiveDatabaseFactoryInstrumentedTest,com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest,com.example.directive.DirectiveManifestIntegrationsInstrumentedTest,com.example.directive.DirectiveRuntimeBehaviourInstrumentedTest'
+          adb shell am instrument -w -e class "$CORE" "$RUNNER" | tee artifact/CORE_RUNTIME.txt
+          grep -Eq 'OK \([0-9]+ tests?\)' artifact/CORE_RUNTIME.txt
+          ! grep -q 'FAILURES!!!' artifact/CORE_RUNTIME.txt
+
+      - name: Verify light 150 percent tablet and landscape surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          CLASS='com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest'
+          adb shell cmd uimode night no
+          adb shell settings put system font_scale 1.5
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/LIGHT_FONT_150_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/LIGHT_FONT_150_UI.txt
+          adb shell settings put system font_scale 1.0
+          adb shell wm size 1600x2560
+          adb shell wm density 320
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/TABLET_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/TABLET_UI.txt
+          adb shell wm size reset
+          adb shell wm density reset
+          adb shell settings put system accelerometer_rotation 0
+          adb shell settings put system user_rotation 1
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/LANDSCAPE_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/LANDSCAPE_UI.txt
+
+      - name: Upload EXEC002 amended acceptance artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-exec002-planner-amendments-03092026191235
+          path: artifact
+          if-no-files-found: error
+          retention-days: 30
