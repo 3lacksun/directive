@@ -1,0 +1,25 @@
+name: Dr Stone runner availability probe
+
+on:
+  push:
+    branches:
+      - runner-probe-drstone-030920261145
+    paths:
+      - '.github/workflows/runner-probe-drstone.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          java -version || true
+          echo "GITHUB_RUNNER_PROBE_PASS"
