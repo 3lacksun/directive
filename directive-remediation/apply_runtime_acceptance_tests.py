@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -33,7 +34,7 @@ class DirectiveLaunchAccessibilityInstrumentedTest {
 
         compose.onNodeWithText("Tasks").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Filters").assertIsDisplayed()
+        compose.onNodeWithText("Filters").performScrollTo().assertIsDisplayed()
 
         compose.onNodeWithText("Plan").performClick()
         compose.waitForIdle()
@@ -201,6 +202,87 @@ class DirectiveRuntimeBehaviourInstrumentedTest {
 }
 '''
 
+reboot = r'''package com.example.directive
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.example.directive.data.database.DirectiveDatabaseFactory
+import com.example.directive.data.database.entity.ReminderEntity
+import com.example.directive.data.database.entity.TaskEntity
+import com.example.directive.domain.model.ReminderState
+import com.example.directive.domain.model.ReminderType
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class DirectiveRebootReminderInstrumentedTest {
+    private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    private val taskId = "runtime-reboot-task"
+    private val reminderId = "runtime-reboot-reminder"
+    private val requestCode = 1903701
+
+    @Test fun seedFutureReminderForReboot() = runBlocking {
+        val now = System.currentTimeMillis()
+        val target = now + 15 * 60_000L
+        val db = DirectiveDatabaseFactory.build(context)
+        try {
+            db.openHelper.writableDatabase
+            runCatching { db.reminderDao().delete(reminderId) }
+            db.taskDao().upsertAll(listOf(TaskEntity(id = taskId, title = "Reboot reminder", createdAt = now, updatedAt = now)))
+            db.reminderDao().insert(
+                ReminderEntity(
+                    id = reminderId,
+                    taskId = taskId,
+                    type = ReminderType.ABSOLUTE,
+                    absoluteAt = target,
+                    exactTimingRequested = false,
+                    scheduledAt = null,
+                    systemRequestCode = requestCode,
+                    state = ReminderState.PENDING,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+            )
+            val seeded = db.reminderDao().getById(reminderId)
+            assertNotNull(seeded)
+            assertEquals(ReminderState.PENDING, seeded!!.state)
+            assertEquals(null, seeded.scheduledAt)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test fun verifyReminderRestoredAfterActualBoot() = runBlocking {
+        val db = DirectiveDatabaseFactory.build(context)
+        try {
+            db.openHelper.writableDatabase
+            val restored = withTimeout(20_000) {
+                var value = db.reminderDao().getById(reminderId)
+                while (value == null || value.state != ReminderState.SCHEDULED || value.scheduledAt == null) {
+                    delay(250)
+                    value = db.reminderDao().getById(reminderId)
+                }
+                value
+            }
+            assertEquals(ReminderState.SCHEDULED, restored.state)
+            assertNotNull(restored.scheduledAt)
+            assertTrue(restored.scheduledAt!! > System.currentTimeMillis())
+        } finally {
+            runCatching { db.reminderDao().delete(reminderId) }
+            runCatching { db.taskDao().softDelete(taskId, System.currentTimeMillis()) }
+            db.close()
+        }
+    }
+}
+'''
+
 (test_dir / "DirectiveLaunchAccessibilityInstrumentedTest.kt").write_text(accessibility, encoding="utf-8")
 (test_dir / "DirectiveRuntimeBehaviourInstrumentedTest.kt").write_text(behaviour, encoding="utf-8")
-print("RUNTIME_ACCEPTANCE_TEST_OVERLAY=PASS files=2")
+(test_dir / "DirectiveRebootReminderInstrumentedTest.kt").write_text(reboot, encoding="utf-8")
+print("RUNTIME_ACCEPTANCE_TEST_OVERLAY=PASS files=3")
