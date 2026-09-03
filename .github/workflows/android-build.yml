@@ -85,9 +85,9 @@ jobs:
           echo 'SIG-02 database instrumentation'; test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveDatabaseFactoryInstrumentedTest.kt
           echo 'SIG-03 accessibility instrumentation'; test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
           echo 'SIG-04 manifest instrumentation'; test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveManifestIntegrationsInstrumentedTest.kt
-          echo 'SIG-05 Quick Add accessibility'; grep -q 'contentDescription = "Quick Add"' build-src/app/src/main/kotlin/com/example/directive/ui/Screens.kt || { echo 'SIG-05 source context:'; grep -n -C 4 -i 'quick' build-src/app/src/main/kotlin/com/example/directive/ui/Screens.kt || true; exit 1; }
+          echo 'SIG-05 Quick Add accessibility'; grep -q 'contentDescription = "Quick Add"' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
           echo 'SIG-06 shared database factory'; grep -q 'DirectiveDatabaseFactory.build' build-src/app/src/main/kotlin/com/example/directive/widget/TodayWidget.kt
-          echo 'SIG-07 portable backup schema'; grep -q 'BackupPayload.CURRENT_SCHEMA_VERSION' build-src/app/src/main/kotlin/com/example/directive/data/portability/BackupService.kt
+          echo 'SIG-07 portable backup schema v2'; grep -q 'const val CURRENT_SCHEMA = 2' build-src/app/src/main/kotlin/com/example/directive/data/portability/BackupModels.kt; grep -q 'doc.schemaVersion !in 1..DirectiveBackup.CURRENT_SCHEMA' build-src/app/src/main/kotlin/com/example/directive/data/portability/BackupCodec.kt
           echo 'SIG-08 recurrence action integration'; grep -q 'RecurrenceService' build-src/app/src/main/kotlin/com/example/directive/notifications/ReminderActionReceiver.kt
 
       - name: Set up Gradle 9.5.1
