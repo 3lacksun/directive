@@ -1,0 +1,22 @@
+name: INTERFACE SQLite Runtime Smoke
+
+on:
+  push:
+    branches:
+      - interface-r17-sqlite-harness-03092026080500
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_sqlite, sqlite3
+          coverage: none
+      - run: php -r 'var_export(PDO::getAvailableDrivers()); echo PHP_EOL; if(!in_array("sqlite",PDO::getAvailableDrivers(),true)) exit(69);'
