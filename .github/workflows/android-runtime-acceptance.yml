@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           test -f artifact/DIRECTIVE-1.0.0-debug.apk
           test -f artifact/DIRECTIVE-1.0.0-androidTest.apk
-          (cd artifact && sha256sum -c SHA256SUMS.txt)
+          sha256sum -c artifact/SHA256SUMS.txt
           grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/APK_BADGING.txt
       - name: Set up Java 21
         uses: actions/setup-java@v4
