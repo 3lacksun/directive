@@ -1,0 +1,101 @@
+name: INTERFACE R17.1 SQLite Acceptance
+
+on:
+  push:
+    branches:
+      - interface-r17-sqlite-harness-03092026080500
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PHP 8.4 with real PDO SQLite
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_sqlite, sqlite3, openssl, sodium
+          coverage: none
+      - name: Prove runtime
+        run: php -r 'var_export(PDO::getAvailableDrivers()); echo PHP_EOL; if(!in_array("sqlite",PDO::getAvailableDrivers(),true)) exit(69);'
+      - name: Acquire exact persisted INTERFACE packages and verify hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/interface-pkgs /tmp/current /tmp/predecessor results
+          fetch_drive() {
+            local id="$1" out="$2"
+            curl -fL --retry 2 --connect-timeout 20 --max-time 120 -o "$out" "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t" || \
+            curl -fL --retry 2 --connect-timeout 20 --max-time 120 -o "$out" "https://drive.google.com/uc?export=download&id=${id}&confirm=t"
+          }
+          fetch_drive '1H1sM9ojq-2rFi4oMzRwqTvxstcF15ApW' /tmp/interface-pkgs/r17.zip
+          fetch_drive '1tF3WZQsV7meQlM8ji8Y2r2OMeOFfq7sq' /tmp/interface-pkgs/r16.zip
+          echo 'e88d039ae798039c688e0522c15ecc5f37e22084b41da9097cc7d5970aa31489  /tmp/interface-pkgs/r17.zip' | sha256sum -c -
+          echo 'c665ecd71d9c889e2b208a390348864c516e8e8f528aae1fad720930c20326f6  /tmp/interface-pkgs/r16.zip' | sha256sum -c -
+          unzip -q /tmp/interface-pkgs/r17.zip -d /tmp/current
+          unzip -q /tmp/interface-pkgs/r16.zip -d /tmp/predecessor
+          sha256sum /tmp/current/config.php /tmp/current/auth_v2.php /tmp/current/r17.php /tmp/predecessor/config.php /tmp/predecessor/auth_v2.php | tee results/source_sha256.txt
+          grep -q '^211b7e35b7031a70e807707310ae48157e74aad9d7a1473acb8badf5f77e0e4e  /tmp/current/config.php$' results/source_sha256.txt
+          grep -q '^e379792e093576d0614afb91c9751deb08676fe94ccb2af05ad353a95e432b36  /tmp/current/auth_v2.php$' results/source_sha256.txt
+          grep -q '^3f2b390adfb5408dcb680cf64fdf070e0d5c3caa91f4690688da5d63265823d3  /tmp/current/r17.php$' results/source_sha256.txt
+          grep -q '^09fb34adb6125552598ab4e5e0e9304634e96635629a1f53f927d33c458e717b  /tmp/predecessor/config.php$' results/source_sha256.txt
+          grep -q '^ed9eaa9fdf638def34d10ce5792929903cd99804cb48852f875f728a0774cdb0  /tmp/predecessor/auth_v2.php$' results/source_sha256.txt
+      - name: Lint exact source and harness
+        run: |
+          php -l /tmp/current/config.php
+          php -l /tmp/current/auth_v2.php
+          php -l /tmp/current/r17.php
+          php -l /tmp/predecessor/config.php
+          php -l /tmp/predecessor/auth_v2.php
+          php -l interface-r17-harness/create_r16_fixture.php
+          php -l interface-r17-harness/verify_r17_migration.php
+          php -l interface-r17-harness/verify_r17_backup_restore.php
+      - name: Execute deterministic R16 to R17 migration matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/interface-work results
+          for N in 0 1 3; do
+            DB="/tmp/interface-work/r16_case_${N}.sqlite"
+            php interface-r17-harness/create_r16_fixture.php /tmp/predecessor "$DB" "$N" > "results/r16_fixture_${N}.json"
+            php interface-r17-harness/verify_r17_migration.php /tmp/current "$DB" "$N" > "results/r16_to_r17_${N}.json"
+          done
+      - name: Execute R17 backup to clean R17 restore round trip
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=/tmp/interface-work/r17_backup_app
+          rm -rf "$APP"
+          mkdir -p "$APP/storage" "$APP/uploads"
+          cp /tmp/current/config.php /tmp/current/auth_v2.php /tmp/current/r17.php "$APP/"
+          php interface-r17-harness/verify_r17_backup_restore.php "$APP" > results/r17_backup_restore.json
+      - name: Converge evidence
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          out=pathlib.Path('results')
+          names=['r16_to_r17_0.json','r16_to_r17_1.json','r16_to_r17_3.json','r17_backup_restore.json']
+          cases=[]
+          for name in names:
+              obj=json.loads((out/name).read_text())
+              cases.append({'file':name,'case':obj.get('case'),'result':obj.get('result')})
+          passed=sum(c['result']=='PASS' for c in cases)
+          s={'harness':'INTERFACE R17.1 PHP/PDO SQLite acceptance','expected_cases':4,'executed_cases':len(cases),'passed_cases':passed,'result':'PASS' if passed==4 else 'FAIL','cases':cases}
+          (out/'SUMMARY.json').write_text(json.dumps(s,indent=2)+'\n')
+          print(json.dumps(s,indent=2))
+          if s['result']!='PASS': raise SystemExit(1)
+          PY
+          sha256sum results/* > results/SHA256SUMS.txt
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interface-r17-sqlite-acceptance-evidence
+          path: results/**
+          if-no-files-found: warn
+          retention-days: 14
