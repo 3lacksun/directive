@@ -1,0 +1,191 @@
+name: DIRECTIVE Final EXEC002 Reboot Proof V7
+
+on:
+  push:
+    paths:
+      - '.github/workflows/final-exec002-reboot-proof-v7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: directive-final-exec002-reboot-proof-v7
+  cancel-in-progress: true
+
+jobs:
+  reboot-proof:
+    name: Prove persisted reminder restoration across actual Android reboot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout acceptance controls
+        uses: actions/checkout@v4
+
+      - name: Download exact V6 source and APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-final-exec002-convergence-v6
+          path: v6
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33747327046
+
+      - name: Verify exact V6 provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f v6/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz
+          test -f v6/DIRECTIVE-1.0.0-debug.apk
+          test -f v6/DIRECTIVE-1.0.0-androidTest.apk
+          echo '8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb  v6/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz' | sha256sum -c -
+          mkdir artifact
+          cp v6/FINAL_SOURCE_ARCHIVE_SHA256.txt artifact/V6_FINAL_SOURCE_ARCHIVE_SHA256.txt
+          cp v6/APK_SHA256SUMS.txt artifact/V6_APK_SHA256SUMS.txt
+          printf 'parent_v6_run=33747327046\nparent_v6_source_sha256=8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb\n' > artifact/PARENT_V6_PROVENANCE.txt
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+
+      - name: Install Android 17 API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-37.0;google_apis;x86_64'
+          sdkmanager 'platform-tools' 'emulator' 'build-tools;37.0.0' 'platforms;android-37.0' "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-v7-api37 --package "$IMAGE"
+          printf '%s\n' "$IMAGE" > artifact/EMULATOR_PACKAGE.txt
+
+      - name: Boot clean Android 17 API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-v7-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
+          test "$boot" = 1
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          { adb shell getprop ro.build.version.release; adb shell getprop ro.build.version.sdk; adb shell getprop ro.product.cpu.abi; adb shell getprop ro.product.cpu.pagesize.max; } | tee artifact/EMULATOR_PROPERTIES.txt
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 37
+
+      - name: Install exact V6 APKs and resolve runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb uninstall com.example.directive.debug >/dev/null 2>&1 || true
+          adb install v6/DIRECTIVE-1.0.0-debug.apk | tee artifact/CLEAN_INSTALL.txt
+          grep -q Success artifact/CLEAN_INSTALL.txt
+          adb install v6/DIRECTIVE-1.0.0-androidTest.apk | tee artifact/ANDROIDTEST_INSTALL.txt
+          grep -q Success artifact/ANDROIDTEST_INSTALL.txt
+          adb shell pm grant com.example.directive.debug android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n1 | tr -d '\r')"
+          test -n "$COMPONENT"; printf '%s\n' "$COMPONENT" > artifact/LAUNCH_COMPONENT.txt
+          adb shell pm list instrumentation | tr -d '\r' | tee artifact/INSTRUMENTATION_LIST.txt
+          RUNNER="$(awk '/\(target=com.example.directive.debug\)/ {v=$1; sub(/^instrumentation:/,"",v); print v; exit}' artifact/INSTRUMENTATION_LIST.txt)"
+          test -n "$RUNNER"; printf '%s\n' "$RUNNER" > artifact/INSTRUMENTATION_COMPONENT.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/INITIAL_LAUNCH.txt
+          grep -q 'Status: ok' artifact/INITIAL_LAUNCH.txt
+
+      - name: Seed persisted future reminder
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          SEED='com.example.directive.DirectiveRebootReminderInstrumentedTest#seedFutureReminderForReboot'
+          adb shell am instrument -w -e class "$SEED" "$RUNNER" | tee artifact/REBOOT_SEED.txt
+          grep -Eq 'OK \(1 test\)' artifact/REBOOT_SEED.txt
+          ! grep -q 'FAILURES!!!' artifact/REBOOT_SEED.txt
+          COMPONENT="$(cat artifact/LAUNCH_COMPONENT.txt)"
+          adb shell am start -W -n "$COMPONENT" | tee artifact/PRE_REBOOT_LAUNCH.txt
+          grep -q 'Status: ok' artifact/PRE_REBOOT_LAUNCH.txt
+          adb shell am get-standby-bucket com.example.directive.debug | tee artifact/STANDBY_BUCKET_PRE_REBOOT.txt || true
+
+      - name: Perform actual reboot and prove pre-launch restoration
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb logcat -c || true
+          adb reboot
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
+          test "$boot" = 1
+          sleep 12
+          adb shell am get-standby-bucket com.example.directive.debug | tee artifact/STANDBY_BUCKET_POST_REBOOT_PRE_LAUNCH.txt || true
+          mkdir -p artifact/db-post-reboot-pre-launch
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db > artifact/db-post-reboot-pre-launch/directive.db
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-wal > artifact/db-post-reboot-pre-launch/directive.db-wal 2>/dev/null || true
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-shm > artifact/db-post-reboot-pre-launch/directive.db-shm 2>/dev/null || true
+          python3 - <<'PY' | tee artifact/REMINDER_POST_REBOOT_PRE_LAUNCH.txt
+          import sqlite3
+          con=sqlite3.connect('file:artifact/db-post-reboot-pre-launch/directive.db?mode=ro', uri=True)
+          row=con.execute("select id,state,scheduledAt,absoluteAt,updatedAt from reminders where id='runtime-reboot-reminder'").fetchone()
+          print(row)
+          if not row:
+              raise SystemExit('reboot reminder missing after actual reboot')
+          if row[1] != 'SCHEDULED':
+              raise SystemExit(f'expected SCHEDULED after boot recovery, got {row[1]}')
+          if row[2] is None:
+              raise SystemExit('scheduledAt missing after boot recovery')
+          if row[3] is None:
+              raise SystemExit('absoluteAt missing after boot recovery')
+          if row[2] != row[3]:
+              raise SystemExit(f'absolute reminder schedule mismatch: scheduledAt={row[2]} absoluteAt={row[3]}')
+          con.close()
+          print('ACTUAL_REBOOT_PRE_LAUNCH_RESTORATION=PASS')
+          PY
+          adb logcat -d -v time > artifact/POST_REBOOT_PRE_LAUNCH_LOGCAT.txt
+          grep -E 'ReminderRestoreReceiver|com.example.directive|BOOT_COMPLETED|AndroidRuntime|Hilt' artifact/POST_REBOOT_PRE_LAUNCH_LOGCAT.txt > artifact/POST_REBOOT_PRE_LAUNCH_LOGCAT_FILTERED.txt || true
+
+      - name: Verify restored reminder through instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          VERIFY='com.example.directive.DirectiveRebootReminderInstrumentedTest#verifyReminderRestoredAfterActualBoot'
+          adb shell am instrument -w -e class "$VERIFY" "$RUNNER" | tee artifact/REBOOT_RESTORE_VERIFIER.txt
+          grep -Eq 'OK \(1 test\)' artifact/REBOOT_RESTORE_VERIFIER.txt
+          ! grep -q 'FAILURES!!!' artifact/REBOOT_RESTORE_VERIFIER.txt
+
+      - name: Verify startup recovery remains idempotent after successful boot restoration
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMPONENT="$(cat artifact/LAUNCH_COMPONENT.txt)"
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          VERIFY='com.example.directive.DirectiveRebootReminderInstrumentedTest#verifyReminderRestoredAfterActualBoot'
+          adb shell am start -W -n "$COMPONENT" | tee artifact/POST_REBOOT_APP_LAUNCH.txt
+          grep -q 'Status: ok' artifact/POST_REBOOT_APP_LAUNCH.txt
+          sleep 3
+          adb shell am instrument -w -e class "$VERIFY" "$RUNNER" | tee artifact/POST_LAUNCH_RESTORE_VERIFIER.txt
+          grep -Eq 'OK \(1 test\)' artifact/POST_LAUNCH_RESTORE_VERIFIER.txt
+          ! grep -q 'FAILURES!!!' artifact/POST_LAUNCH_RESTORE_VERIFIER.txt
+          adb shell am get-standby-bucket com.example.directive.debug | tee artifact/STANDBY_BUCKET_POST_RECOVERY.txt || true
+
+      - name: Write final reboot proof provenance
+        if: always()
+        shell: bash
+        run: |
+          printf 'repository=%s\ncommit=%s\nrun_id=%s\nparent_v6_run=33747327046\nparent_v6_source_sha256=8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb\nandroid_release=17\nandroid_sdk=37\nactual_reboot=true\nboot_recovery_expected_state=SCHEDULED\nboot_recovery_pre_launch=true\nstartup_recovery_fallback=true\ntest_harness_correction=expected_SCHEDULED_after_successful_boot_restore\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" > artifact/FINAL_REBOOT_PROOF_PROVENANCE.txt
+
+      - name: Upload final reboot proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-final-exec002-reboot-proof-v7
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
