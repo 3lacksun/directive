@@ -1,4 +1,4 @@
-name: Dr Stone Command Build 30 offline-toolchain bootstrap
+name: Dr Stone Command Build 30 split offline-toolchain bootstrap
 
 on:
   push:
@@ -14,7 +14,6 @@ permissions:
 env:
   GRADLE_VERSION: '8.11.1'
   GRADLE_SHA256: 'f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6'
-  BUNDLE_NAME: 'dr-stone-build30-offline-toolchain'
 
 jobs:
   bootstrap:
@@ -30,21 +29,17 @@ jobs:
         with:
           packages: ''
           accept-android-sdk-licenses: true
-      - name: Install exact Android SDK 36 toolchain
+      - name: Provision exact Gradle and API 36
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
-      - name: Download exact Gradle distribution
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fL --retry 5 --retry-all-errors "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o "$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip"
-          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip" | sha256sum -c -
-          unzip -q "$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip" -d "$RUNNER_TEMP"
+          curl -fL --retry 5 --retry-all-errors "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o "$RUNNER_TEMP/gradle.zip"
+          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "GRADLE_BIN=$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin/gradle" >> "$GITHUB_ENV"
-      - name: Create dependency-equivalent source-free Android project
+      - name: Create dependency-equivalent source-free project
         shell: bash
         run: |
           set -euo pipefail
@@ -100,37 +95,57 @@ jobs:
           printf 'package com.nexarenew.cache\nclass Cache\n' > "$P/app/src/main/java/com/nexarenew/cache/Cache.kt"
           printf 'package com.nexarenew.cache\nimport org.junit.Test\nclass CacheTest { @Test fun cache() = Unit }\n' > "$P/app/src/test/java/com/nexarenew/cache/CacheTest.kt"
           echo "CACHE_PROJECT=$P" >> "$GITHUB_ENV"
-      - name: Resolve exact plugins dependencies compiler lint and test toolchain
+      - name: Resolve complete Build 30 dependency family
         shell: bash
         working-directory: ${{ env.CACHE_PROJECT }}
         run: |
           set -euo pipefail
           "$GRADLE_BIN" --no-daemon --max-workers=2 :app:dependencies
           "$GRADLE_BIN" --no-daemon --max-workers=2 testDebugUnitTest compileDebugKotlin lintDebug assembleDebug
-      - name: Package minimal portable offline toolchain
+      - name: Package split portable components
         shell: bash
         run: |
           set -euo pipefail
-          OUT="$RUNNER_TEMP/offline-bundle"
-          mkdir -p "$OUT/gradle-home/caches" "$OUT/android-sdk/platforms" "$OUT/android-sdk/build-tools" "$OUT/gradle-dist"
-          for p in "$HOME/.gradle/caches/modules-2" "$HOME/.gradle/caches/8.11.1" "$HOME/.gradle/caches/jars-9" "$HOME/.gradle/caches/transforms-4" "$HOME/.gradle/caches/journal-1"; do
-            if [ -e "$p" ]; then cp -a "$p" "$OUT/gradle-home/caches/"; fi
-          done
-          if [ -d "$HOME/.gradle/native" ]; then cp -a "$HOME/.gradle/native" "$OUT/gradle-home/"; fi
-          cp -a "$RUNNER_TEMP/gradle-${GRADLE_VERSION}" "$OUT/gradle-dist/"
-          cp -a "$ANDROID_HOME/platforms/android-36" "$OUT/android-sdk/platforms/"
-          cp -a "$ANDROID_HOME/build-tools/36.0.0" "$OUT/android-sdk/build-tools/"
-          cp -a "$ANDROID_HOME/platform-tools" "$OUT/android-sdk/"
-          cp -a "$ANDROID_HOME/licenses" "$OUT/android-sdk/"
-          du -sh "$OUT"/* "$OUT/gradle-home/caches"/*
-          tar --zstd -cf "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst" -C "$OUT" .
-          sha256sum "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst" | tee "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst.sha256"
-          stat -c '%s' "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst"
+          mkdir -p "$RUNNER_TEMP/sdk-export/platforms" "$RUNNER_TEMP/sdk-export/build-tools"
+          cp -a "$ANDROID_HOME/platforms/android-36" "$RUNNER_TEMP/sdk-export/platforms/"
+          cp -a "$ANDROID_HOME/build-tools/36.0.0" "$RUNNER_TEMP/sdk-export/build-tools/"
+          cp -a "$ANDROID_HOME/platform-tools" "$RUNNER_TEMP/sdk-export/"
+          cp -a "$ANDROID_HOME/licenses" "$RUNNER_TEMP/sdk-export/"
+          tar --zstd -cf "$GITHUB_WORKSPACE/gradle-dist.tar.zst" -C "$RUNNER_TEMP" "gradle-${GRADLE_VERSION}"
+          tar --zstd -cf "$GITHUB_WORKSPACE/android-sdk36.tar.zst" -C "$RUNNER_TEMP/sdk-export" .
+          tar --zstd -cf "$GITHUB_WORKSPACE/gradle-modules.tar.zst" -C "$HOME/.gradle/caches" modules-2
+          split -b 400M -d -a 1 "$GITHUB_WORKSPACE/gradle-modules.tar.zst" "$GITHUB_WORKSPACE/gradle-modules.part-"
+          sha256sum "$GITHUB_WORKSPACE/gradle-dist.tar.zst" "$GITHUB_WORKSPACE/android-sdk36.tar.zst" "$GITHUB_WORKSPACE/gradle-modules.tar.zst" | tee "$GITHUB_WORKSPACE/toolchain-components.sha256"
+          ls -lh "$GITHUB_WORKSPACE"/*.tar.zst "$GITHUB_WORKSPACE"/gradle-modules.part-* "$GITHUB_WORKSPACE/toolchain-components.sha256"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
-          name: ${{ env.BUNDLE_NAME }}
-          path: |
-            ${{ env.BUNDLE_NAME }}.tar.zst
-            ${{ env.BUNDLE_NAME }}.tar.zst.sha256
-          if-no-files-found: error
+          name: drstone-gradle-dist
+          path: gradle-dist.tar.zst
+          retention-days: 1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: drstone-android-sdk36
+          path: android-sdk36.tar.zst
+          retention-days: 1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: drstone-gradle-modules-part0
+          path: gradle-modules.part-0
+          retention-days: 1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: drstone-gradle-modules-part1
+          path: gradle-modules.part-1
+          if-no-files-found: ignore
+          retention-days: 1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: drstone-gradle-modules-part2
+          path: gradle-modules.part-2
+          if-no-files-found: ignore
+          retention-days: 1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: drstone-toolchain-checksums
+          path: toolchain-components.sha256
           retention-days: 1
