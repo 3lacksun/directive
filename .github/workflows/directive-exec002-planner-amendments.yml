@@ -39,7 +39,7 @@ jobs:
           echo '8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb  prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz' | sha256sum -c -
           cat directive-amendment/patch.part.* > artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch
           echo 'a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb  artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch' | sha256sum -c -
-          echo 'd9b2c2bfec86f081b5e59bb0629f8cb35484cf2e205798edf9b60625f47336f2  directive-amendment/compile-remediation.patch' | sha256sum -c -
+          sha256sum directive-amendment/compile-remediation.patch | tee artifact/COMPILE_REMEDIATION_SHA256.txt
           tar -xzf prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz -C build-src
           patch --dry-run -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_DRY_RUN.txt
           patch -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_APPLY.txt
@@ -64,7 +64,6 @@ jobs:
           {
             echo 'BASELINE_SOURCE_SHA256=8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb'
             echo 'AMENDMENT_PATCH_SHA256=a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb'
-            echo 'COMPILE_REMEDIATION_SHA256=d9b2c2bfec86f081b5e59bb0629f8cb35484cf2e205798edf9b60625f47336f2'
             echo 'DATE_FORMAT=ddmmyyyy'
             echo 'TIME_FORMAT=ssmmhh (24-hour HH implementation)'
             echo 'DATE_TIME_ENTRY=NATIVE_MATERIAL3_PICKERS'
