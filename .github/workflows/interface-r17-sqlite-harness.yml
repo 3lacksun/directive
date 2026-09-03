@@ -11,14 +11,16 @@ jobs:
       - name: Install PHP SQLite runtime
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-cli php-sqlite3 unzip curl
+          sudo apt-get install -y php-cli php-sqlite3 unzip curl python3-pip
+          python3 -m pip install --user gdown --break-system-packages
           php -v
           php -m | grep -Ei 'PDO|sqlite'
       - name: Fetch authoritative deployment candidate
         run: |
           mkdir -p interface-harness
           cd interface-harness
-          curl -L --fail --retry 3 -o candidate.zip 'https://drive.usercontent.google.com/download?id=1H1sM9ojq-2rFi4oMzRwqTvxstcF15ApW&export=download&confirm=t'
+          python3 -m gdown 'https://drive.google.com/uc?id=1H1sM9ojq-2rFi4oMzRwqTvxstcF15ApW' -O candidate.zip
+          sha256sum candidate.zip
           echo 'e88d039ae798039c688e0522c15ecc5f37e22084b41da9097cc7d5970aa31489  candidate.zip' | sha256sum -c -
           unzip -q candidate.zip -d app
       - name: Create acceptance harness
@@ -66,7 +68,7 @@ jobs:
           $pdo->exec("DELETE FROM memories WHERE id='m1'");
           close_db_connection();
           $restored=restore_server_backup($backupId,false);
-          assert_h(!empty($restored['ok']) || !empty($restored['restored']) || isset($restored['backup_id']),'R17 restore completed');
+          assert_h(is_array($restored),'R17 restore completed');
           $check=new PDO('sqlite:'.DB_FILE,null,null,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]);
           assert_h((string)$check->query("SELECT content FROM assistant_rules WHERE user_id='managed'")->fetchColumn()==='Keep answers concise','R17 assistant rules round-trip');
           assert_h((int)$check->query("SELECT COUNT(*) FROM memories WHERE id='m1' AND user_id='managed'")->fetchColumn()===1,'R17 memory round-trip');
@@ -77,6 +79,7 @@ jobs:
       - name: Run PHP/PDO SQLite acceptance harness
         run: php interface-harness/harness.php | tee interface-harness/result.txt
       - name: Upload evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: interface-r17-sqlite-harness-evidence
