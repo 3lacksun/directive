@@ -30,7 +30,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: 33747327046
 
-      - name: Verify baseline and apply locked amendment
+      - name: Verify baseline and apply locked amendments
         shell: bash
         run: |
           set -euo pipefail
@@ -39,12 +39,17 @@ jobs:
           echo '8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb  prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz' | sha256sum -c -
           cat directive-amendment/patch.part.* > artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch
           echo 'a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb  artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch' | sha256sum -c -
+          echo 'd9b2c2bfec86f081b5e59bb0629f8cb35484cf2e205798edf9b60625f47336f2  directive-amendment/compile-remediation.patch' | sha256sum -c -
           tar -xzf prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz -C build-src
           patch --dry-run -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_DRY_RUN.txt
           patch -p1 -d build-src < artifact/DIRECTIVE_PLANNER_AMENDMENTS.patch | tee artifact/PATCH_APPLY.txt
+          patch --dry-run -p1 -d build-src < directive-amendment/compile-remediation.patch | tee artifact/COMPILE_REMEDIATION_DRY_RUN.txt
+          patch -p1 -d build-src < directive-amendment/compile-remediation.patch | tee artifact/COMPILE_REMEDIATION_APPLY.txt
           DT=build-src/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt
           TASK=build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt
           TVM=build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt
+          CAL=build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt
+          PLAN=build-src/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt
           grep -Fq 'DateTimeFormatter.ofPattern("ddMMyyyy")' "$DT"
           grep -Fq 'DateTimeFormatter.ofPattern("ssmmHH")' "$DT"
           grep -Fq 'fun DirectiveDatePickerField' "$DT"
@@ -52,10 +57,14 @@ jobs:
           grep -Fq 'fun DirectiveMinuteOfDayPickerField' "$DT"
           grep -Fq 'subtasks.forEach' "$TASK"
           grep -Fq 'subtasksByParent' "$TVM"
+          grep -Fq 'formatDirectiveDate(date)' "$CAL"
+          grep -Fq 'formatDirectiveTime(shifted)' "$PLAN"
           ! grep -R -E 'Text\("(Date \(YYYY-MM-DD\)|Time \(HH:MM|Hour 00–23|Minute 00–59)' build-src/app/src/main/kotlin >/dev/null
+          ! grep -R -E 'TODO|FIXME|NotImplemented' build-src/app/src/main/kotlin >/dev/null
           {
             echo 'BASELINE_SOURCE_SHA256=8fa892943cff23f564d3263941194117a423a18bb004b4b69ecc5cb67780e1fb'
             echo 'AMENDMENT_PATCH_SHA256=a9daa854f390f5e952310e622357738cd7d345814438c0b36453fd61d7a0eaeb'
+            echo 'COMPILE_REMEDIATION_SHA256=d9b2c2bfec86f081b5e59bb0629f8cb35484cf2e205798edf9b60625f47336f2'
             echo 'DATE_FORMAT=ddmmyyyy'
             echo 'TIME_FORMAT=ssmmhh (24-hour HH implementation)'
             echo 'DATE_TIME_ENTRY=NATIVE_MATERIAL3_PICKERS'
@@ -89,7 +98,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           IMAGE='system-images;android-37.0;google_apis;x86_64'
           sdkmanager 'platform-tools' 'emulator' 'build-tools;37.0.0' 'platforms;android-37.0' "$IMAGE"
-          echo no | avdmanager create avd --force --name directive-amended-api37 --package "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-amended-v2-api37 --package "$IMAGE"
           printf '%s\n' "$IMAGE" > artifact/EMULATOR_PACKAGE.txt
 
       - name: Unit tests lint debug AndroidTest and R8 release
@@ -128,7 +137,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
-          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-amended-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-amended-v2-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
           adb wait-for-device
           boot=''
           for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
@@ -136,6 +145,7 @@ jobs:
           adb shell settings put global window_animation_scale 0 || true
           adb shell settings put global transition_animation_scale 0 || true
           adb shell settings put global animator_duration_scale 0 || true
+          { adb shell getprop ro.build.version.release; adb shell getprop ro.build.version.sdk; adb shell getprop ro.product.cpu.abi; } | tee artifact/EMULATOR_PROPERTIES.txt
           test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 37
 
       - name: Clean install cold launch and core runtime
@@ -186,11 +196,11 @@ jobs:
           adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/LANDSCAPE_UI.txt
           grep -Eq 'OK \(2 tests?\)' artifact/LANDSCAPE_UI.txt
 
-      - name: Upload EXEC002 amended acceptance artifact
+      - name: Upload corrected EXEC002 acceptance artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: directive-exec002-planner-amendments-03092026191235
+          name: directive-exec002-planner-amendments-v2-03092026195048
           path: artifact
           if-no-files-found: error
           retention-days: 30
