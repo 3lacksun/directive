@@ -32,20 +32,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p directive-source directive-remediation/auditskill-patch
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part00.b64?token=CMNAELQWCDOY73QHC3DSOHDKTD7A5AA' -o directive-source/part00.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part01.b64?token=CMNAELQSK6VY6PK4YEN4EEDKTD7A5AA' -o directive-source/part01.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part02.b64?token=CMNAELQCBPQRD4F7CGDCRG3KTD7A5AA' -o directive-source/part02.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part03.b64?token=CMNAELQAKL6JUZ3EWYONZ5DKTD7A5AA' -o directive-source/part03.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part05.b64?token=CMNAELUQDBVML7DUSESJOG3KTD7A5AA' -o directive-source/part05.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part06.b64?token=CMNAELV5LCXFRND36OVK7CTKTD7A5AA' -o directive-source/part06.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part07.b64?token=CMNAELRKO76FFKYHSF5QIDLKTD7A5AA' -o directive-source/part07.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part09.b64?token=CMNAELW47VTJBNIVUFX72HDKTD7A5AA' -o directive-source/part09.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part11.b64?token=CMNAELSSV7KDZTMKHCUNT6DKTD7A5AA' -o directive-source/part11.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part13.b64?token=CMNAELQH4OILRQZVZAP7PUTKTD7A5AA' -o directive-source/part13.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part00.b64?token=CMNAELQUDKX7DCDFDVK7L33KTD7BLAA' -o directive-remediation/auditskill-patch/part00.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part01.b64?token=CMNAELUBC37RV37DFUDTPX3KTD7BLAA' -o directive-remediation/auditskill-patch/part01.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part02.b64?token=CMNAELW4UR3F7NJOCPRAWYTKTD7BLAA' -o directive-remediation/auditskill-patch/part02.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part03.b64?token=CMNAELQV5J3TB4TWXXVUBE3KTD7BLAA' -o directive-remediation/auditskill-patch/part03.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part00.b64?token=CMNAELWVFYEUBAMYWDSKB63KTEBRHAA' -o directive-source/part00.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part01.b64?token=CMNAELRUDCO3VBMGZGKQIXDKTEBRHAA' -o directive-source/part01.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part02.b64?token=CMNAELV3PPCLOD6Y3GAME3LKTEBRHAA' -o directive-source/part02.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part03.b64?token=CMNAELR7KXBGQVP3YNJKRQDKTEBRHAA' -o directive-source/part03.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part05.b64?token=CMNAELR3WC2I772BPIHL3ZLKTEBRHAA' -o directive-source/part05.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part06.b64?token=CMNAELSEY7L7GR7F3SXZMLDKTEBRHAA' -o directive-source/part06.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part07.b64?token=CMNAELVIP2ATFSBI5OECFILKTEBRHAA' -o directive-source/part07.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part09.b64?token=CMNAELRKTI36BMUV2T3ZXELKTEBRHAA' -o directive-source/part09.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part11.b64?token=CMNAELT3SJCQEDADXTL7IM3KTEBRHAA' -o directive-source/part11.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part13.b64?token=CMNAELQVSVMNFEVM22WEMPLKTEBRHAA' -o directive-source/part13.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part00.b64?token=CMNAELV2ZFRZX367Z7BQNVTKTEBRTAA' -o directive-remediation/auditskill-patch/part00.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part01.b64?token=CMNAELXLSXWVBHUGN7KEI2DKTEBRTAA' -o directive-remediation/auditskill-patch/part01.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part02.b64?token=CMNAELX4GQ2GIAHKZY22OLDKTEBRTAA' -o directive-remediation/auditskill-patch/part02.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part03.b64?token=CMNAELRXXCMHU73KPGQNRDLKTEBRTAA' -o directive-remediation/auditskill-patch/part03.b64
 
       - name: Reconstruct verified compiler-converged baseline
         shell: bash
