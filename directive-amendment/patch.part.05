@@ -1,0 +1,124 @@
+-                            TextButton(onClick={vm.toggleComplete(item)}){Text(if(item.occurrenceCompleted)"Reopen" else "Complete")}
+-                            if(!item.occurrenceCompleted) TextButton(onClick={vm.skipOccurrence(item)}){Text("Skip")}
+-                            TextButton(onClick={vm.editThisOccurrence(item,onEditTask)}){Text("This occurrence")}
+-                            TextButton(onClick={vm.editThisAndFuture(item,onEditTask)}){Text("This + future")}
+-                            TextButton(onClick={onEditTask(item.rootTaskId ?: task.id)}){Text("Entire series")}
+-                        } else {
+-                            TextButton(onClick={onEditTask(task.id)}){Text("Edit")}
+-                            if(!item.isSeriesDefinition) TextButton(onClick={vm.toggleComplete(item)}){Text(if(task.completedAt!=null)"Reopen" else "Complete")}
++                    subtasks.forEach { subtask ->
++                        HorizontalDivider(Modifier.padding(start=28.dp))
++                        Row(
++                            Modifier.fillMaxWidth().padding(start=24.dp,end=8.dp,top=3.dp,bottom=3.dp),
++                            verticalAlignment=Alignment.CenterVertically,
++                        ) {
++                            Checkbox(
++                                checked=subtask.completedAt!=null,
++                                onCheckedChange={vm.toggleSubtask(subtask)},
++                                enabled=subtask.archivedAt==null && subtask.deletedAt==null,
++                            )
++                            Column(Modifier.weight(1f)) {
++                                Text(subtask.title,style=MaterialTheme.typography.bodyMedium)
++                                taskDeadlineLabel(subtask)?.let { Text(it,style=MaterialTheme.typography.labelSmall) }
++                            }
++                            if(subtask.archivedAt==null && subtask.deletedAt==null) TextButton(onClick={onEditTask(subtask.id)}){Text("Edit")}
+                         }
+                     }
+                 }
+@@ -91,3 +119,15 @@
+         if(state.tasks.isEmpty()) item { Text("Nothing here.",style=MaterialTheme.typography.bodyMedium) }
+     }
+ }
++
++private fun taskDeadlineLabel(task:TaskEntity):String? {
++    val zone=ZoneId.systemDefault()
++    task.dueAt?.let { due ->
++        val value=Instant.ofEpochMilli(due).atZone(zone)
++        return "Deadline ${formatDirectiveDate(value.toLocalDate())} ${formatDirectiveTime(value.toLocalTime())}"
++    }
++    task.allDayDueDate?.let { raw ->
++        runCatching { LocalDate.parse(raw) }.getOrNull()?.let { return "Deadline ${formatDirectiveDate(it)}" }
++    }
++    return null
++}
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksViewModel.kt	2026-09-03 18:10:25.700982392 +0000
+@@ -60,6 +60,7 @@
+     val tasks:List<TaskListItem> = emptyList(),
+     val categories:List<CategoryEntity> = emptyList(),
+     val counts:Map<String?,Int> = emptyMap(),
++    val subtasksByParent:Map<String,List<TaskEntity>> = emptyMap(),
+ )
+ 
+ private data class RecurrenceSnapshot(
+@@ -84,6 +85,7 @@
+     private val filters=MutableStateFlow(TaskFilters())
+     private val categories=categoryRepository.observeActive()
+     private val counts=repository.observeCategoryCounts().map { it.associate { row->row.categoryId to row.taskCount } }
++    private val allChildren=repository.observeAllChildren()
+     private val recurrenceSnapshot=combine(repository.observeActive(),recurrenceRepository.observeAllSeries(),recurrenceRepository.observeAllOccurrenceStates()){tasks,series,states->RecurrenceSnapshot(tasks,series,states)}
+ 
+     private fun bounds(date:LocalDate,zone:ZoneId):Pair<Long,Long> =
+@@ -167,11 +169,21 @@
+         }
+     }.combine(filters){result,f->sortTasks(result,f.sort)}
+ 
++    private data class TaskContent(val tasks:List<TaskListItem>,val categories:List<CategoryEntity>,val counts:Map<String?,Int>,val children:List<TaskEntity>)
++
+     val state=combine(
+         combine(list,query,category,filters){l,q,c,f->Request(l,q,c,f)},
+-        combine(tasks,categories,counts){t,cats,ct->Triple(t,cats,ct)},
++        combine(tasks,categories,counts,allChildren){t,cats,ct,ch->TaskContent(t,cats,ct,ch)},
+     ){request,content->
+-        TasksUiState(request.list,request.query,request.category,request.filters,content.first,content.second,content.third)
++        val visibleParentIds=content.tasks.map { it.task.id }.toSet()
++        val visibleChildren=content.children.filter { child ->
++            child.parentTaskId in visibleParentIds && when(request.list) {
++                TaskSmartList.ARCHIVED -> child.deletedAt==null && child.archivedAt!=null
++                TaskSmartList.TRASH -> child.deletedAt!=null
++                else -> child.deletedAt==null && child.archivedAt==null
++            }
++        }.groupBy { requireNotNull(it.parentTaskId) }
++        TasksUiState(request.list,request.query,request.category,request.filters,content.tasks,content.categories,content.counts,visibleChildren)
+     }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000),TasksUiState())
+ 
+     fun select(value:TaskSmartList){list.value=value;category.value=null}
+@@ -211,6 +223,16 @@
+     }
+ 
+ 
++    fun toggleSubtask(task:TaskEntity)=viewModelScope.launch {
++        if(task.status==TaskStatus.COMPLETED) {
++            repository.uncomplete(task.id,System.currentTimeMillis())
++            repository.get(task.id)?.let { reminderCoordinator.restoreForTask(it) }
++        } else {
++            repository.complete(task.id,System.currentTimeMillis())
++            reminderCoordinator.cancelForTask(task.id)
++        }
++    }
++
+     fun skipOccurrence(item:TaskListItem)=viewModelScope.launch {
+         val seriesId=item.seriesId ?: return@launch
+         val key=item.occurrenceKey ?: return@launch
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/today/TodayScreen.kt source/app/src/main/kotlin/com/example/directive/feature/today/TodayScreen.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/today/TodayScreen.kt	2026-09-02 16:00:24.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/today/TodayScreen.kt	2026-09-03 18:09:40.636135787 +0000
+@@ -19,6 +19,10 @@
+ import com.example.directive.domain.calendar.CalendarPermissionState
+ import com.example.directive.domain.calendar.CalendarDayProjection
+ import com.example.directive.ui.theme.*
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
++import com.example.directive.ui.components.formatDirectiveMinuteOfDay
++import com.example.directive.ui.components.parseStoredLocalTime
+ import java.time.Instant
+ import java.time.LocalDate
+ import java.time.LocalTime
+@@ -35,7 +39,7 @@
+             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
+                 TextButton(onClick=vm::previousDay){Text("‹",color=Porcelain)}
+                 Column{
+-                    Text(state.date.toString(),color=MutedText,style=MaterialTheme.typography.labelMedium)
++                    Text(formatDirectiveDate(state.date),color=MutedText,style=MaterialTheme.typography.labelMedium)
+                     Text(if(state.isToday) "Today" else "Daily Strategy",color=Porcelain,style=MaterialTheme.typography.headlineLarge)
