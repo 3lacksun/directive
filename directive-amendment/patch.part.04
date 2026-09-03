@@ -1,0 +1,92 @@
+-                    RecurrenceEndMode.ON_DATE -> item { OutlinedTextField(recurrence.endAt?.atZone(ZoneId.systemDefault())?.toLocalDate()?.toString() ?: "",{value->vm.updateDraft{ current ->
+-                        val date=runCatching{LocalDate.parse(value)}.getOrNull(); current.copy(recurrence=current.recurrence?.copy(endAt=date?.atTime(LocalTime.MAX)?.atZone(ZoneId.systemDefault())?.toInstant()))
+-                    }},label={Text("End date")},modifier=Modifier.fillMaxWidth(),singleLine=true) }
++                    RecurrenceEndMode.ON_DATE -> item {
++                        val endDate=recurrence.endAt?.atZone(ZoneId.systemDefault())?.toLocalDate()
++                        DirectiveDatePickerField("End date",endDate,{date->vm.updateDraft{ current ->
++                            current.copy(recurrence=current.recurrence?.copy(endAt=date?.atTime(LocalTime.MAX)?.atZone(ZoneId.systemDefault())?.toInstant()))
++                        }},Modifier.fillMaxWidth())
++                    }
+                     RecurrenceEndMode.AFTER_OCCURRENCES -> item { OutlinedTextField(recurrence.maxOccurrences?.toString() ?: "",{value->vm.updateDraft{it.copy(recurrence=it.recurrence?.copy(maxOccurrences=value.toIntOrNull()?.coerceAtLeast(1)))}},label={Text("Occurrences")},modifier=Modifier.fillMaxWidth(),singleLine=true) }
+                     else -> Unit
+                 }
+@@ -207,8 +216,8 @@
+             }
+             item {
+                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+-                    OutlinedTextField(fixedReminderDate,{fixedReminderDate=it},label={Text("Fixed reminder date")},modifier=Modifier.weight(1f),singleLine=true)
+-                    OutlinedTextField(fixedReminderTime,{fixedReminderTime=it},label={Text("Time")},modifier=Modifier.weight(1f),singleLine=true)
++                    DirectiveDatePickerField("Fixed reminder date",fixedReminderDate,{fixedReminderDateIso=it?.toString()},Modifier.weight(1f))
++                    DirectiveTimePickerField("Time",fixedReminderTime,{fixedReminderTimeIso=it?.toString()},Modifier.weight(1f))
+                 }
+             }
+             item {
+@@ -219,7 +228,7 @@
+             }
+             items(d.reminders.size,key={"reminder-$it"}) { index ->
+                 val reminder=d.reminders[index]
+-                ListItem(headlineContent={Text(reminder.type.name.replace('_',' '))},supportingContent={Text(listOfNotNull(reminder.absoluteAt?.toString(),reminder.offsetMinutes?.let{"${it}m"},"exact=${reminder.exactTimingRequested}").joinToString(" • "))},trailingContent={TextButton(onClick={vm.removeReminder(index)}){Text("Remove")}})
++                ListItem(headlineContent={Text(reminder.type.name.replace('_',' '))},supportingContent={Text(listOfNotNull(reminder.absoluteAt?.atZone(ZoneId.systemDefault())?.let{"${formatDirectiveDate(it.toLocalDate())} ${formatDirectiveTime(it.toLocalTime())}"},reminder.offsetMinutes?.let{"${it}m"},"exact=${reminder.exactTimingRequested}").joinToString(" • "))},trailingContent={TextButton(onClick={vm.removeReminder(index)}){Text("Remove")}})
+             }
+             item { Text("Precise timing requests exact-alarm access only from the precise controls; if unavailable, scheduling falls back to deferrable work.",style=MaterialTheme.typography.bodySmall) }
+ 
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt	2026-09-03 18:10:46.464157423 +0000
+@@ -7,12 +7,18 @@
+ import androidx.compose.material3.*
+ import androidx.compose.runtime.*
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.Alignment
+ import androidx.compose.ui.unit.dp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.lifecycle.viewmodel.compose.viewModel
+ import com.example.directive.domain.model.TaskPriority
+ import com.example.directive.domain.model.TaskStatus
++import com.example.directive.data.database.entity.TaskEntity
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
+ import java.time.LocalDate
++import java.time.Instant
++import java.time.ZoneId
+ 
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+@@ -64,25 +70,47 @@
+         }
+         items(state.tasks,key={"${it.task.id}-${it.occurrenceKey.orEmpty()}-${it.occurrenceCompleted}"}){item->
+             val task=item.task
++            val subtasks=state.subtasksByParent[task.id].orEmpty()
+             ElevatedCard(Modifier.fillMaxWidth()){
+-                Row(Modifier.fillMaxWidth().padding(12.dp)){
+-                    Column(Modifier.weight(1f)){
+-                        Text(task.title)
+-                        Text(listOfNotNull(task.durationMinutes?.let{"${it}m"},task.dueAt?.let{"Deadline"},(item.seriesId ?: task.seriesId)?.let{if(item.occurrenceKey!=null)"Recurring occurrence" else "Recurring series"}).joinToString(" • "),style=MaterialTheme.typography.bodySmall)
++                Column(Modifier.fillMaxWidth()) {
++                    Row(Modifier.fillMaxWidth().padding(12.dp),verticalAlignment=Alignment.CenterVertically){
++                        Column(Modifier.weight(1f)){
++                            Text(task.title,style=MaterialTheme.typography.titleSmall)
++                            val metadata=listOfNotNull(task.durationMinutes?.let{"${it}m"},taskDeadlineLabel(task),(item.seriesId ?: task.seriesId)?.let{if(item.occurrenceKey!=null)"Recurring occurrence" else "Recurring series"},subtasks.takeIf{it.isNotEmpty()}?.let{"${it.size} subtask${if(it.size==1)"" else "s"}"})
++                            if(metadata.isNotEmpty()) Text(metadata.joinToString(" • "),style=MaterialTheme.typography.bodySmall)
++                        }
++                        Column {
++                            val archivedOrDeleted = task.archivedAt != null || task.deletedAt != null
++                            if(archivedOrDeleted) {
++                                TextButton(onClick={vm.restore(item)}){Text("Restore")}
++                            } else if(item.seriesId!=null && item.occurrenceKey!=null) {
++                                TextButton(onClick={vm.toggleComplete(item)}){Text(if(item.occurrenceCompleted)"Reopen" else "Complete")}
++                                if(!item.occurrenceCompleted) TextButton(onClick={vm.skipOccurrence(item)}){Text("Skip")}
++                                TextButton(onClick={vm.editThisOccurrence(item,onEditTask)}){Text("This occurrence")}
++                                TextButton(onClick={vm.editThisAndFuture(item,onEditTask)}){Text("This + future")}
++                                TextButton(onClick={onEditTask(item.rootTaskId ?: task.id)}){Text("Entire series")}
++                            } else {
++                                TextButton(onClick={onEditTask(task.id)}){Text("Edit")}
++                                if(!item.isSeriesDefinition) TextButton(onClick={vm.toggleComplete(item)}){Text(if(task.completedAt!=null)"Reopen" else "Complete")}
++                            }
++                        }
+                     }
+-                    Column {
+-                        val archivedOrDeleted = task.archivedAt != null || task.deletedAt != null
+-                        if(archivedOrDeleted) {
+-                            TextButton(onClick={vm.restore(item)}){Text("Restore")}
+-                        } else if(item.seriesId!=null && item.occurrenceKey!=null) {
