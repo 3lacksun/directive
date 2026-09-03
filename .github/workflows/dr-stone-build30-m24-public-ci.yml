@@ -1,4 +1,4 @@
-name: Dr Stone Command Build 30 M24 temporary public-runner verification
+name: Dr Stone Command Build 30 offline-toolchain bootstrap
 
 on:
   push:
@@ -12,113 +12,174 @@ permissions:
   contents: read
 
 env:
-  SOURCE_FILE_ID: "1k_pl_rLWw3S7nAcynu0NzS7zRlRPaOkP"
-  SOURCE_ZIP: "DR_STONE_COMMAND_V0_3_0_BUILD30_M24_CI_CANDIDATE_03092026075959.zip"
-  SOURCE_SHA256: "fc5bf3f3cb82ad0f14dd0f953f88ef9da32368b092cd2ee6abb2025926bd1f7d"
-  APK_NAME: "DR_STONE_COMMAND_V0_3_0_BUILD30_M24_DEBUG.apk"
-  EVIDENCE_DIR: "build30-m24-evidence"
+  GRADLE_VERSION: '8.11.1'
+  GRADLE_SHA256: 'f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6'
+  BUNDLE_NAME: 'dr-stone-build30-offline-toolchain'
 
 jobs:
-  verify-build:
+  bootstrap:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
           java-version: '21'
+
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
         with:
           packages: ''
           accept-android-sdk-licenses: true
-      - name: Download and verify exact Build 30 candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EVIDENCE_DIR"
-          curl -fL --retry 5 --retry-all-errors \
-            "https://drive.usercontent.google.com/download?id=${SOURCE_FILE_ID}&export=download&confirm=t" \
-            -o "$SOURCE_ZIP"
-          echo "$SOURCE_SHA256  $SOURCE_ZIP" | sha256sum -c - | tee "$EVIDENCE_DIR/source-sha256.txt"
-          unzip -t "$SOURCE_ZIP" | tee "$EVIDENCE_DIR/source-zip-integrity.txt"
-          rm -rf "$RUNNER_TEMP/build30-m24"
-          mkdir -p "$RUNNER_TEMP/build30-m24"
-          unzip -q "$SOURCE_ZIP" -d "$RUNNER_TEMP/build30-m24"
-          SRC_DIR="$(find "$RUNNER_TEMP/build30-m24" -mindepth 1 -maxdepth 1 -type d | head -1)"
-          if [ -z "$SRC_DIR" ]; then SRC_DIR="$RUNNER_TEMP/build30-m24"; fi
-          test -f "$SRC_DIR/app/build.gradle.kts"
-          chmod +x "$SRC_DIR/gradlew"
-          echo "SRC_DIR=$SRC_DIR" >> "$GITHUB_ENV"
-      - name: Install Android SDK 36
+
+      - name: Install exact Android SDK 36 toolchain
         shell: bash
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-      - name: Verify identity and source contracts
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euo pipefail
-          grep -F 'applicationId = "com.nexarenew.drstonecommand"' app/build.gradle.kts
-          grep -F 'versionCode = 30' app/build.gradle.kts
-          grep -F 'versionName = "0.3.0"' app/build.gradle.kts
-          grep -F 'compileSdk = 36' app/build.gradle.kts
-          grep -F 'targetSdk = 36' app/build.gradle.kts
-          bash tools/run-pure-tests.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/pure-tests.txt"
-          bash tools/verify-dr-stone-release-contracts.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/release-contracts.txt"
-          bash tools/verify-ux-feature-patch.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/ux-contracts.txt"
-          bash tools/verify-build25-feature-contracts.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/retained-feature-contracts.txt"
-          bash tools/verify-large-file-contracts.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/large-file-contracts.txt"
-          bash tools/verify-media-feature-contracts.sh | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/media-contracts.txt"
-      - name: Android unit tests
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/testDebugUnitTest.txt"
-      - name: Kotlin compilation
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --max-workers=2 compileDebugKotlin | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/compileDebugKotlin.txt"
-      - name: Android lint
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --max-workers=2 lintDebug | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/lintDebug.txt"
-      - name: Clean assembleDebug
-        shell: bash
-        working-directory: ${{ env.SRC_DIR }}
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --max-workers=2 clean assembleDebug | tee "$GITHUB_WORKSPACE/$EVIDENCE_DIR/assembleDebug.txt"
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/$APK_NAME"
-      - name: APK forensics
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Download exact Gradle distribution
         shell: bash
         run: |
           set -euo pipefail
-          BT="$ANDROID_HOME/build-tools/36.0.0"
-          "$BT/aapt" dump badging "$APK_NAME" | tee "$EVIDENCE_DIR/apk-badging.txt"
-          grep -F "package: name='com.nexarenew.drstonecommand' versionCode='30' versionName='0.3.0'" "$EVIDENCE_DIR/apk-badging.txt"
-          grep -F "sdkVersion:'26'" "$EVIDENCE_DIR/apk-badging.txt"
-          grep -F "targetSdkVersion:'36'" "$EVIDENCE_DIR/apk-badging.txt"
-          grep -F "application-label:'Dr Stone Command'" "$EVIDENCE_DIR/apk-badging.txt"
-          "$BT/aapt" dump permissions "$APK_NAME" | tee "$EVIDENCE_DIR/apk-permissions.txt"
-          "$BT/aapt" dump xmltree "$APK_NAME" AndroidManifest.xml | tee "$EVIDENCE_DIR/apk-manifest.txt"
-          "$BT/zipalign" -c -v 4 "$APK_NAME" | tee "$EVIDENCE_DIR/zipalign.txt"
-          "$BT/apksigner" verify --verbose --print-certs "$APK_NAME" | tee "$EVIDENCE_DIR/apksigner.txt"
-          sha256sum "$APK_NAME" | tee "$APK_NAME.sha256"
-          stat -c '%s' "$APK_NAME" | tee "$EVIDENCE_DIR/apk-size-bytes.txt"
+          curl -fL --retry 5 --retry-all-errors \
+            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+            -o "$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip"
+          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle-${GRADLE_VERSION}-bin.zip" -d "$RUNNER_TEMP"
+          echo "GRADLE_BIN=$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin/gradle" >> "$GITHUB_ENV"
+
+      - name: Create dependency-equivalent source-free Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          P="$RUNNER_TEMP/cache-project"
+          mkdir -p "$P/app/src/main/java/com/nexarenew/cache" "$P/app/src/test/java/com/nexarenew/cache"
+          cat > "$P/settings.gradle.kts" <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "DrStoneCacheBootstrap"
+          include(":app")
+          EOF
+          cat > "$P/build.gradle.kts" <<'EOF'
+          plugins {
+              id("com.android.application") version "8.10.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.1.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.1.21" apply false
+          }
+          EOF
+          cat > "$P/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF
+          cat > "$P/app/build.gradle.kts" <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+          android {
+              namespace = "com.nexarenew.cache"
+              compileSdk = 36
+              defaultConfig {
+                  applicationId = "com.nexarenew.cache"
+                  minSdk = 26
+                  targetSdk = 36
+                  versionCode = 1
+                  versionName = "1.0"
+                  testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+              }
+              buildFeatures { compose = true; buildConfig = true }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+              packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+          }
+          dependencies {
+              val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
+              implementation(composeBom)
+              androidTestImplementation(composeBom)
+              androidTestImplementation("androidx.test.ext:junit:1.2.1")
+              androidTestImplementation("androidx.test:core-ktx:1.6.1")
+              androidTestImplementation("androidx.test:runner:1.6.2")
+              implementation("androidx.activity:activity-compose:1.10.1")
+              implementation("androidx.core:core-ktx:1.16.0")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              debugImplementation("androidx.compose.ui:ui-tooling")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
+              implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
+              implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
+              implementation("androidx.navigation:navigation-compose:2.9.0")
+              implementation("androidx.work:work-runtime-ktx:2.10.1")
+              implementation("androidx.datastore:datastore-preferences:1.2.1")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+              implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+              testImplementation("junit:junit:4.13.2")
+          }
+          EOF
+          cat > "$P/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme" /></manifest>
+          EOF
+          mkdir -p "$P/app/src/main/res/values"
+          cat > "$P/app/src/main/res/values/styles.xml" <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar" /></resources>
+          EOF
+          cat > "$P/app/src/main/java/com/nexarenew/cache/Cache.kt" <<'EOF'
+          package com.nexarenew.cache
+          class Cache
+          EOF
+          cat > "$P/app/src/test/java/com/nexarenew/cache/CacheTest.kt" <<'EOF'
+          package com.nexarenew.cache
+          import org.junit.Test
+          class CacheTest { @Test fun cache() = Unit }
+          EOF
+          echo "CACHE_PROJECT=$P" >> "$GITHUB_ENV"
+
+      - name: Resolve exact plugins dependencies compiler lint and test toolchain
+        shell: bash
+        working-directory: ${{ env.CACHE_PROJECT }}
+        run: |
+          set -euo pipefail
+          "$GRADLE_BIN" --no-daemon --max-workers=2 :app:dependencies
+          "$GRADLE_BIN" --no-daemon --max-workers=2 testDebugUnitTest compileDebugKotlin lintDebug assembleDebug
+
+      - name: Package portable offline toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/offline-bundle"
+          mkdir -p "$OUT/gradle-home" "$OUT/android-sdk" "$OUT/gradle-dist"
+          cp -a "$HOME/.gradle/caches" "$OUT/gradle-home/"
+          if [ -d "$HOME/.gradle/native" ]; then cp -a "$HOME/.gradle/native" "$OUT/gradle-home/"; fi
+          cp -a "$RUNNER_TEMP/gradle-${GRADLE_VERSION}" "$OUT/gradle-dist/"
+          cp -a "$ANDROID_HOME/platforms" "$OUT/android-sdk/"
+          cp -a "$ANDROID_HOME/build-tools" "$OUT/android-sdk/"
+          cp -a "$ANDROID_HOME/platform-tools" "$OUT/android-sdk/"
+          cp -a "$ANDROID_HOME/licenses" "$OUT/android-sdk/"
+          du -sh "$OUT"/*
+          tar --zstd -cf "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst" -C "$OUT" .
+          sha256sum "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst" | tee "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst.sha256"
+          stat -c '%s' "$GITHUB_WORKSPACE/${BUNDLE_NAME}.tar.zst"
+
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
-          name: dr-stone-command-build30-m24-debug
+          name: ${{ env.BUNDLE_NAME }}
           path: |
-            DR_STONE_COMMAND_V0_3_0_BUILD30_M24_DEBUG.apk
-            DR_STONE_COMMAND_V0_3_0_BUILD30_M24_DEBUG.apk.sha256
-            build30-m24-evidence/
+            ${{ env.BUNDLE_NAME }}.tar.zst
+            ${{ env.BUNDLE_NAME }}.tar.zst.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
