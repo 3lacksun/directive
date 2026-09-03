@@ -1,0 +1,100 @@
+                     var reminderOffset by remember(prefs.reminderDefaultOffsetMinutes) { mutableStateOf(prefs.reminderDefaultOffsetMinutes.toString()) }
+                     var snooze by remember(prefs.snoozeMinutes) { mutableStateOf(prefs.snoozeMinutes.toString()) }
+                     var mondayFirst by remember(prefs.weekStartsMonday) { mutableStateOf(prefs.weekStartsMonday) }
+                     var analyticsEnabled by remember(prefs.analyticsEnabled) { mutableStateOf(prefs.analyticsEnabled) }
+                     OutlinedTextField(duration, { duration = it.filter(Char::isDigit).take(4) }, label = { Text("Default task duration (minutes)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+-                        OutlinedTextField(planStart, { planStart = it.take(5) }, label = { Text("Plan starts") }, singleLine = true, modifier = Modifier.weight(1f))
+-                        OutlinedTextField(planEnd, { planEnd = it.take(5) }, label = { Text("Plan ends") }, singleLine = true, modifier = Modifier.weight(1f))
++                        DirectiveMinuteOfDayPickerField("Plan starts",planStartMinutes,{planStartMinutes=it},Modifier.weight(1f))
++                        DirectiveMinuteOfDayPickerField("Plan ends",planEndMinutes,{planEndMinutes=it},Modifier.weight(1f),allowEndOfDay=true)
+                     }
+                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("Working hours"); Switch(workingEnabled, { workingEnabled = it }) }
+                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+-                        OutlinedTextField(workingStart, { workingStart = it.take(5) }, label = { Text("Work starts") }, singleLine = true, modifier = Modifier.weight(1f))
+-                        OutlinedTextField(workingEnd, { workingEnd = it.take(5) }, label = { Text("Work ends") }, singleLine = true, modifier = Modifier.weight(1f))
++                        DirectiveMinuteOfDayPickerField("Work starts",workingStartMinutes,{workingStartMinutes=it},Modifier.weight(1f))
++                        DirectiveMinuteOfDayPickerField("Work ends",workingEndMinutes,{workingEndMinutes=it},Modifier.weight(1f),allowEndOfDay=true)
+                     }
+                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                         OutlinedTextField(reminderOffset, { reminderOffset = it.filter(Char::isDigit).take(4) }, label = { Text("Reminder lead (min)") }, singleLine = true, modifier = Modifier.weight(1f))
+@@ -163,14 +165,14 @@
+                         Switch(prefs.dynamicColourEnabled,vm::setDynamicColour)
+                     }
+                     val durationValue = duration.toIntOrNull()
+-                    val planStartValue = parseTimeMinutes(planStart)
+-                    val planEndValue = parseTimeMinutes(planEnd, allowEndOfDay = true)
+-                    val workStartValue = parseTimeMinutes(workingStart)
+-                    val workEndValue = parseTimeMinutes(workingEnd, allowEndOfDay = true)
++                    val planStartValue = planStartMinutes
++                    val planEndValue = planEndMinutes
++                    val workStartValue = workingStartMinutes
++                    val workEndValue = workingEndMinutes
+                     val reminderValue = reminderOffset.toIntOrNull()
+                     val snoozeValue = snooze.toIntOrNull()
+-                    val valid = durationValue != null && durationValue > 0 && planStartValue != null && planEndValue != null && planStartValue < planEndValue && workStartValue != null && workEndValue != null && workStartValue < workEndValue && reminderValue != null && reminderValue >= 0 && snoozeValue != null && snoozeValue > 0
+-                    Button(enabled = valid, onClick = { vm.savePlannerSettings(requireNotNull(durationValue), requireNotNull(planStartValue), requireNotNull(planEndValue), workingEnabled, requireNotNull(workStartValue), requireNotNull(workEndValue), requireNotNull(reminderValue), requireNotNull(snoozeValue), mondayFirst, analyticsEnabled) }) { Text("Save settings") }
++                    val valid = durationValue != null && durationValue > 0 && planStartValue < planEndValue && workStartValue < workEndValue && reminderValue != null && reminderValue >= 0 && snoozeValue != null && snoozeValue > 0
++                    Button(enabled = valid, onClick = { vm.savePlannerSettings(requireNotNull(durationValue), planStartValue, planEndValue, workingEnabled, workStartValue, workEndValue, requireNotNull(reminderValue), requireNotNull(snoozeValue), mondayFirst, analyticsEnabled) }) { Text("Save settings") }
+                     Text("Default Category is managed in Categories. Calendar selection is managed on Calendar.", style = MaterialTheme.typography.bodySmall)
+                 }
+             }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt source/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt	1970-01-01 00:00:00.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/ui/components/DirectiveDateTime.kt	2026-09-03 18:08:13.987071029 +0000
+@@ -0,0 +1,156 @@
++package com.example.directive.ui.components
++
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.Button
++import androidx.compose.material3.DatePicker
++import androidx.compose.material3.DatePickerDialog
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedButton
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.material3.TimePicker
++import androidx.compose.material3.rememberDatePickerState
++import androidx.compose.material3.rememberTimePickerState
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import java.time.Instant
++import java.time.LocalDate
++import java.time.LocalTime
++import java.time.ZoneOffset
++import java.time.format.DateTimeFormatter
++
++/** User-facing DIRECTIVE formats. Persistence remains ISO-8601 internally. */
++private val directiveDateFormatter = DateTimeFormatter.ofPattern("ddMMyyyy")
++private val directiveTimeFormatter = DateTimeFormatter.ofPattern("ssmmHH")
++
++fun formatDirectiveDate(date: LocalDate): String = date.format(directiveDateFormatter)
++fun formatDirectiveTime(time: LocalTime): String = time.withNano(0).format(directiveTimeFormatter)
++fun formatDirectiveMinuteOfDay(minutes: Int): String = when (minutes) {
++    1440 -> "000024"
++    else -> {
++        val safe = minutes.coerceIn(0, 1439)
++        "%02d%02d%02d".format(0, safe % 60, safe / 60)
++    }
++}
++fun parseStoredLocalTime(raw: String?): LocalTime? = raw?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun DirectiveDatePickerField(
++    label: String,
++    value: LocalDate?,
++    onValueChange: (LocalDate?) -> Unit,
++    modifier: Modifier = Modifier,
