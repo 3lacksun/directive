@@ -1,0 +1,182 @@
+name: Dr Stone Command Build 31 EXEC002 Final GitHub Flow
+
+on:
+  push:
+    branches:
+      - dr-stone-command-build31-exec002-final-03092026095023
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - name: Checkout build harness
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Download and verify exact Build 31 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet gdown==5.2.0
+          gdown --id '1-N1wboE_Zo3vRS9dICNcp7RSqJRqcy0L' -O drstone-source.zip
+          echo '63881fde00765f3c7c916157397fe19ac02e1caf21f452a491603413d57a1daa  drstone-source.zip' | sha256sum -c -
+          unzip -t drstone-source.zip
+          mkdir -p "$RUNNER_TEMP/drstone"
+          unzip -q drstone-source.zip -d "$RUNNER_TEMP/drstone"
+          chmod +x "$RUNNER_TEMP/drstone/gradlew"
+          echo "DSC=$RUNNER_TEMP/drstone" >> "$GITHUB_ENV"
+
+      - name: Source contract matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$DSC"
+          bash tools/verify-build-reproducibility.sh
+          bash tools/run-pure-tests.sh
+          bash tools/verify-build25-feature-contracts.sh
+          bash tools/verify-ux-feature-patch.sh
+          bash tools/verify-dr-stone-release-contracts.sh
+          bash tools/verify-large-file-contracts.sh
+          bash tools/verify-media-contracts.sh
+
+      - name: Android unit tests
+        shell: bash
+        run: cd "$DSC" && ./gradlew --no-daemon --stacktrace testDebugUnitTest
+
+      - name: Kotlin compilation
+        shell: bash
+        run: cd "$DSC" && ./gradlew --no-daemon --stacktrace compileDebugKotlin
+
+      - name: Android lint
+        shell: bash
+        run: cd "$DSC" && ./gradlew --no-daemon --stacktrace lintDebug
+
+      - name: Clean assembleDebug
+        shell: bash
+        run: cd "$DSC" && ./gradlew --no-daemon --stacktrace clean assembleDebug
+
+      - name: APK forensics
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          APK="$DSC/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$AAPT" dump badging "$APK" | tee evidence/aapt-badging.txt
+          grep -F "package: name='com.nexarenew.drstonecommand' versionCode='31' versionName='0.3.0'" evidence/aapt-badging.txt
+          grep -F "application-label:'Dr Stone Command'" evidence/aapt-badging.txt
+          grep -F "sdkVersion:'26'" evidence/aapt-badging.txt
+          grep -F "targetSdkVersion:'36'" evidence/aapt-badging.txt
+          "$ZIPALIGN" -c -v 4 "$APK" | tee evidence/zipalign.txt
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee evidence/apksigner.txt
+          sha256sum "$APK" | tee evidence/APK_SHA256.txt
+          cp "$APK" evidence/DR_STONE_COMMAND_V0_3_0_BUILD31_EXEC002_DEBUG.apk
+          cp "$DSC/AUT005_TASK_LEDGER.json" evidence/
+          cp "$DSC/BASELINE_LOCK.json" evidence/
+          cp "$DSC/RELEASE_IDENTITY.json" evidence/
+          (cd "$DSC" && ./gradlew --version) > evidence/GRADLE_VERSION.txt
+
+      - name: Upload final build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-stone-command-build31-exec002-final-build
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            evidence/**
+            ${{ env.DSC }}/app/build/reports/lint-results-debug.html
+            ${{ env.DSC }}/app/build/reports/tests/testDebugUnitTest/**
+
+  instrumentation:
+    needs: verify-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout build harness
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download and verify exact Build 31 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet gdown==5.2.0
+          gdown --id '1-N1wboE_Zo3vRS9dICNcp7RSqJRqcy0L' -O drstone-source.zip
+          echo '63881fde00765f3c7c916157397fe19ac02e1caf21f452a491603413d57a1daa  drstone-source.zip' | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/drstone"
+          unzip -q drstone-source.zip -d "$RUNNER_TEMP/drstone"
+          chmod +x "$RUNNER_TEMP/drstone/gradlew"
+          echo "DSC=$RUNNER_TEMP/drstone" >> "$GITHUB_ENV"
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: API 36 instrumentation and runtime smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          script: |
+            cd "$DSC"
+            ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+            ./gradlew --no-daemon --stacktrace assembleDebug
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell am force-stop com.nexarenew.drstonecommand
+            adb shell monkey -p com.nexarenew.drstonecommand -c android.intent.category.LAUNCHER 1
+            sleep 4
+            adb shell pidof com.nexarenew.drstonecommand
+            adb shell am start -a android.intent.action.VIEW -d 'drstonecommand://tasks' com.nexarenew.drstonecommand
+            sleep 3
+            adb shell pidof com.nexarenew.drstonecommand
+            if adb logcat -d -t 400 | grep -E 'FATAL EXCEPTION: main|Process: com\.nexarenew\.drstonecommand.*FATAL'; then exit 1; fi
+
+      - name: Upload instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-stone-command-build31-exec002-instrumentation
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            ${{ env.DSC }}/app/build/reports/androidTests/**
+            ${{ env.DSC }}/app/build/outputs/androidTest-results/**
