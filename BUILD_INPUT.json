@@ -1,0 +1,13 @@
+{
+  "project": "DIRECTIVE",
+  "version": "1.0.0",
+  "source_checkpoint": "DIRECTIVE_REM002_AUDITSKILL_WRAPPER_AUTHENTICATED_SOURCE_CHECKPOINT_03092026035205.zip",
+  "source_sha256": "61abfda3a6e1de611afa1a755fa1999c2491069a9e1e42b9afcf423805406d06",
+  "implementation_fingerprint": "8544bc72d3d0dddbe067b35ce6b92031d698d65edc0b63b8e05b40cb119e2252",
+  "gradle_wrapper_version": "9.5.1",
+  "gradle_wrapper_jar_sha256": "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7",
+  "gradle_distribution_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+  "java": 21,
+  "compile_sdk": 37,
+  "target_sdk": 37
+}
