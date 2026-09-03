@@ -1,0 +1,38 @@
+name: INTERFACE Static PHP SQLite Runtime
+
+on:
+  push:
+    branches:
+      - interface-r17-sqlite-harness-03092026080500
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify static PHP 8.4 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime
+          curl -fL --retry 3 --connect-timeout 20 --max-time 180 \
+            -o runtime/php-linux-x86_64 \
+            'https://github.com/publicala/php-ci-static/releases/download/php-8.4.22/php-linux-x86_64'
+          echo '4d730a2ddf0e6a4b81c0696643a399eb8b18ad2f61dc02b277ab37ef248344ce  runtime/php-linux-x86_64' | sha256sum -c -
+          chmod +x runtime/php-linux-x86_64
+          runtime/php-linux-x86_64 -v
+          runtime/php-linux-x86_64 -r 'echo json_encode(PDO::getAvailableDrivers()), PHP_EOL; if(!in_array("sqlite",PDO::getAvailableDrivers(),true)) exit(69);'
+          runtime/php-linux-x86_64 -r 'if(!extension_loaded("sqlite3")) exit(70); echo SQLite3::version()["versionString"], PHP_EOL;'
+          sha256sum runtime/php-linux-x86_64 > runtime/SHA256SUMS.txt
+      - name: Upload verified static runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: interface-static-php84-pdo-sqlite-runtime
+          path: runtime/**
+          if-no-files-found: error
+          retention-days: 3
