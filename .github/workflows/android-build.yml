@@ -27,25 +27,27 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Retrieve sealed reconstruction payload from GitHub
+      - name: Validate self-contained sealed payload
         shell: bash
         run: |
           set -euo pipefail
+          test -f sealed-source/part00.b64
+          test -f sealed-source/part01.b64
+          test -f sealed-source/part02.b64
+          test -f sealed-source/part03.b64
+          test -f sealed-source/part05.b64
+          test -f sealed-source/part06.b64
+          test -f sealed-source/part07.b64
+          test -f sealed-source/part09.b64
+          test -f sealed-source/part11.b64
+          test -f sealed-source/part13.b64
+          test -f sealed-patch/part00.b64
+          test -f sealed-patch/part01.b64
+          test -f sealed-patch/part02.b64
+          test -f sealed-patch/part03.b64
           mkdir -p directive-source directive-remediation/auditskill-patch
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part00.b64?token=CMNAELQWCDOY73QHC3DSOHDKTD7A5AA' -o directive-source/part00.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part01.b64?token=CMNAELQSK6VY6PK4YEN4EEDKTD7A5AA' -o directive-source/part01.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part02.b64?token=CMNAELQCBPQRD4F7CGDCRG3KTD7A5AA' -o directive-source/part02.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part03.b64?token=CMNAELQAKL6JUZ3EWYONZ5DKTD7A5AA' -o directive-source/part03.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part05.b64?token=CMNAELUQDBVML7DUSESJOG3KTD7A5AA' -o directive-source/part05.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part06.b64?token=CMNAELV5LCXFRND36OVK7CTKTD7A5AA' -o directive-source/part06.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part07.b64?token=CMNAELRKO76FFKYHSF5QIDLKTD7A5AA' -o directive-source/part07.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part09.b64?token=CMNAELW47VTJBNIVUFX72HDKTD7A5AA' -o directive-source/part09.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part11.b64?token=CMNAELSSV7KDZTMKHCUNT6DKTD7A5AA' -o directive-source/part11.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part13.b64?token=CMNAELQH4OILRQZVZAP7PUTKTD7A5AA' -o directive-source/part13.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part00.b64?token=CMNAELQUDKX7DCDFDVK7L33KTD7BLAA' -o directive-remediation/auditskill-patch/part00.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part01.b64?token=CMNAELUBC37RV37DFUDTPX3KTD7BLAA' -o directive-remediation/auditskill-patch/part01.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part02.b64?token=CMNAELW4UR3F7NJOCPRAWYTKTD7BLAA' -o directive-remediation/auditskill-patch/part02.b64
-          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part03.b64?token=CMNAELQV5J3TB4TWXXVUBE3KTD7BLAA' -o directive-remediation/auditskill-patch/part03.b64
+          cp sealed-source/*.b64 directive-source/
+          cp sealed-patch/*.b64 directive-remediation/auditskill-patch/
 
       - name: Reconstruct verified compiler-converged baseline
         shell: bash
