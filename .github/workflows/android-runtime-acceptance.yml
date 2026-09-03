@@ -1,0 +1,115 @@
+name: DIRECTIVE Android Runtime Acceptance
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: directive-runtime-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    name: API 37 clean-install runtime acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout acceptance harness
+        uses: actions/checkout@v4
+      - name: Download verified run 20 Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-android-build
+          path: artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33734627847
+      - name: Verify downloaded APK evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f artifact/DIRECTIVE-1.0.0-debug.apk
+          test -f artifact/DIRECTIVE-1.0.0-androidTest.apk
+          (cd artifact && sha256sum -c SHA256SUMS.txt)
+          grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/APK_BADGING.txt
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+      - name: Install Android 17 API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-37.0;google_apis;x86_64'
+          sdkmanager 'platform-tools' 'emulator' "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-api37 --package "$IMAGE"
+          printf '%s\n' "$IMAGE" > artifact/EMULATOR_PACKAGE_RUNTIME_RETRY.txt
+      - name: Boot Android 17 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_RUNTIME_RETRY_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$boot" = '1' ] && break
+            sleep 2
+          done
+          test "$boot" = '1'
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          {
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell getprop ro.product.cpu.abi
+            adb shell getprop ro.product.cpu.pagesize.max
+          } | tee artifact/EMULATOR_RUNTIME_RETRY_PROPERTIES.txt
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '37'
+      - name: Clean install and cold launch verified APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb uninstall com.example.directive.debug >/dev/null 2>&1 || true
+          if adb shell pm path com.example.directive.debug 2>/dev/null | grep -q package; then
+            echo 'Target package remained installed after uninstall' >&2
+            exit 1
+          fi
+          adb install artifact/DIRECTIVE-1.0.0-debug.apk | tee artifact/CLEAN_INSTALL_RUNTIME_RETRY.txt
+          grep -q 'Success' artifact/CLEAN_INSTALL_RUNTIME_RETRY.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n 1 | tr -d '\r')"
+          test -n "$COMPONENT"
+          adb shell am start -W -n "$COMPONENT" | tee artifact/CLEAN_LAUNCH_RUNTIME_RETRY.txt
+          grep -q 'Status: ok' artifact/CLEAN_LAUNCH_RUNTIME_RETRY.txt
+          adb shell am force-stop com.example.directive.debug
+      - name: Install test APK and discover instrumentation runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb install artifact/DIRECTIVE-1.0.0-androidTest.apk | tee artifact/ANDROIDTEST_INSTALL_RUNTIME_RETRY.txt
+          grep -q 'Success' artifact/ANDROIDTEST_INSTALL_RUNTIME_RETRY.txt
+          adb shell pm grant com.example.directive.debug android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          adb shell pm list instrumentation | tr -d '\r' | tee artifact/INSTRUMENTATION_LIST.txt
+          INSTRUMENTATION="$(awk '/\(target=com.example.directive.debug\)/ {value=$1; sub(/^instrumentation:/,"",value); print value; exit}' artifact/INSTRUMENTATION_LIST.txt)"
+          test -n "$INSTRUMENTATION"
+          printf '%s\n' "$INSTRUMENTATION" | tee artifact/INSTRUMENTATION_COMPONENT.txt
+          set -o pipefail
+          adb shell am instrument -w "$INSTRUMENTATION" | tee artifact/INSTRUMENTATION_RUNTIME_RETRY.txt
+          ! grep -q 'FAILURES!!!' artifact/INSTRUMENTATION_RUNTIME_RETRY.txt
+          ! grep -q 'INSTRUMENTATION_FAILED' artifact/INSTRUMENTATION_RUNTIME_RETRY.txt
+          grep -Eq 'OK \([0-9]+ tests?\)' artifact/INSTRUMENTATION_RUNTIME_RETRY.txt
+      - name: Upload runtime acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-android-runtime-retry
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
