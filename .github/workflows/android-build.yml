@@ -89,12 +89,11 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager 'platform-tools' 'build-tools;36.0.0'
-          ANDROID_CLI="$ANDROID_HOME/cmdline-tools/15859902/bin/android"
-          test -x "$ANDROID_CLI"
-          "$ANDROID_CLI" --sdk="$ANDROID_HOME" sdk list 'platforms/android-37' --all --canary
-          "$ANDROID_CLI" --sdk="$ANDROID_HOME" sdk install --canary platforms/android-37
-          test -f "$ANDROID_HOME/platforms/android-37/android.jar"
+          sdkmanager 'platform-tools' 'build-tools;37.0.0' 'platforms;android-37.0'
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -x "$ANDROID_HOME/build-tools/37.0.0/aapt"
+          test -x "$ANDROID_HOME/build-tools/37.0.0/zipalign"
+          test -f "$ANDROID_HOME/build-tools/37.0.0/lib/apksigner.jar"
       - name: Unit test, lint and assemble APKs
         working-directory: build-src
         shell: bash
@@ -107,7 +106,7 @@ jobs:
           set -euo pipefail
           APK=build-src/app/build/outputs/apk/debug/app-debug.apk
           TEST_APK=build-src/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          BT="$ANDROID_HOME/build-tools/36.0.0"
+          BT="$ANDROID_HOME/build-tools/37.0.0"
           test -f "$APK"; test -f "$TEST_APK"
           mkdir -p artifact
           cp "$APK" artifact/DIRECTIVE-1.0.0-debug.apk
@@ -120,7 +119,7 @@ jobs:
           unzip -t "$APK" > artifact/APK_ZIP_TEST.txt
           unzip -t "$TEST_APK" > artifact/ANDROIDTEST_APK_ZIP_TEST.txt
           sha256sum artifact/DIRECTIVE-1.0.0-debug.apk artifact/DIRECTIVE-1.0.0-androidTest.apk > artifact/SHA256SUMS.txt
-          printf 'repository=%s\ncommit=%s\nrun_id=%s\nsource_checkpoint=%s\nsource_sha256=%s\ngradle=9.5.1\nwrapper_sha256=%s\ncompile_sdk=37\ntarget_sdk=37\njava=21\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" 'DIRECTIVE_REM002_AUDITSKILL_WRAPPER_AUTHENTICATED_SOURCE_CHECKPOINT_03092026035205.zip' '61abfda3a6e1de611afa1a755fa1999c2491069a9e1e42b9afcf423805406d06' '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7' > artifact/BUILD_PROVENANCE.txt
+          printf 'repository=%s\ncommit=%s\nrun_id=%s\nsource_checkpoint=%s\nsource_sha256=%s\ngradle=9.5.1\nwrapper_sha256=%s\ncompile_sdk=37\nplatform_package=platforms/android-37.0\ntarget_sdk=37\nbuild_tools=37.0.0\njava=21\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" 'DIRECTIVE_REM002_AUDITSKILL_WRAPPER_AUTHENTICATED_SOURCE_CHECKPOINT_03092026035205.zip' '61abfda3a6e1de611afa1a755fa1999c2491069a9e1e42b9afcf423805406d06' '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7' > artifact/BUILD_PROVENANCE.txt
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
