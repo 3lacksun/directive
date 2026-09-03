@@ -1,0 +1,97 @@
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/data/database/dao/TaskDao.kt source/app/src/main/kotlin/com/example/directive/data/database/dao/TaskDao.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/data/database/dao/TaskDao.kt	2026-09-02 15:46:24.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/data/database/dao/TaskDao.kt	2026-09-03 18:10:25.699922694 +0000
+@@ -28,6 +28,9 @@
+     @Query("SELECT * FROM tasks WHERE deletedAt IS NULL AND parentTaskId = :parentTaskId ORDER BY manualOrder, createdAt")
+     fun observeChildren(parentTaskId: String): Flow<List<TaskEntity>>
+ 
++    @Query("SELECT * FROM tasks WHERE parentTaskId IS NOT NULL ORDER BY parentTaskId, manualOrder, createdAt")
++    fun observeAllChildren(): Flow<List<TaskEntity>>
++
+     @Query("SELECT * FROM tasks WHERE deletedAt IS NULL AND archivedAt IS NULL AND parentTaskId IS NULL AND categoryId = :categoryId ORDER BY manualOrder, createdAt DESC")
+     fun observeByCategory(categoryId: String): Flow<List<TaskEntity>>
+ 
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/data/repository/Repositories.kt source/app/src/main/kotlin/com/example/directive/data/repository/Repositories.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/data/repository/Repositories.kt	2026-09-01 20:05:50.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/data/repository/Repositories.kt	2026-09-03 18:10:25.700223922 +0000
+@@ -12,6 +12,7 @@
+     fun observeArchived(): Flow<List<TaskEntity>>
+     fun observeDeleted(): Flow<List<TaskEntity>>
+     fun observeChildren(parentTaskId: String): Flow<List<TaskEntity>>
++    fun observeAllChildren(): Flow<List<TaskEntity>>
+     fun observeByCategory(categoryId: String): Flow<List<TaskEntity>>
+     fun observeUncategorised(): Flow<List<TaskEntity>>
+     fun observeByStatus(status: TaskStatus): Flow<List<TaskEntity>>
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/data/repository/RepositoryImplementations.kt source/app/src/main/kotlin/com/example/directive/data/repository/RepositoryImplementations.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/data/repository/RepositoryImplementations.kt	2026-09-01 20:13:52.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/data/repository/RepositoryImplementations.kt	2026-09-03 18:10:25.700452681 +0000
+@@ -21,6 +21,7 @@
+     override fun observeArchived() = dao.observeArchived()
+     override fun observeDeleted() = dao.observeDeleted()
+     override fun observeChildren(parentTaskId: String) = dao.observeChildren(parentTaskId)
++    override fun observeAllChildren() = dao.observeAllChildren()
+     override fun observeByCategory(categoryId: String) = dao.observeByCategory(categoryId)
+     override fun observeUncategorised() = dao.observeUncategorised()
+     override fun observeByStatus(status: TaskStatus) = dao.observeByStatus(status)
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt	2026-09-03 18:09:40.635912856 +0000
+@@ -25,12 +25,17 @@
+ import com.example.directive.domain.calendar.CalendarPermissionState
+ import com.example.directive.domain.calendar.CalendarDayProjection
+ import com.example.directive.domain.calendar.CalendarViewMode
++import com.example.directive.ui.components.DirectiveDatePickerField
++import com.example.directive.ui.components.DirectiveTimePickerField
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
++import com.example.directive.ui.components.formatDirectiveMinuteOfDay
++import com.example.directive.ui.components.parseStoredLocalTime
+ import java.time.Instant
+ import java.time.LocalDate
+ import java.time.LocalTime
+ import java.time.ZoneId
+ import java.time.ZoneOffset
+-import java.time.format.DateTimeFormatter
+ 
+ private data class CalendarPlannerItem(val task: TaskEntity, val plan: PlanEntryEntity?, val date: LocalDate, val planTaskId:String=task.id, val occurrenceKey:String?=null, val occurrenceAllDay:Boolean?=null)
+ 
+@@ -80,7 +85,7 @@
+             OutlinedButton(onClick = vm::next) { Text("Next") }
+             OutlinedButton(onClick = { showDatePicker = true }) { Text("Choose date") }
+         }
+-        Text(state.selectedDate.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy")), style = MaterialTheme.typography.titleMedium)
++        Text(formatDirectiveDate(state.selectedDate), style = MaterialTheme.typography.titleMedium)
+         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+             items(CalendarViewMode.entries) { mode ->
+                 FilterChip(selected = state.viewMode == mode, onClick = { vm.setViewMode(mode) }, label = { Text(if (mode == CalendarViewMode.THREE_DAY) "3-Day" else mode.name.lowercase().replaceFirstChar(Char::uppercase)) })
+@@ -192,7 +197,7 @@
+         dates.forEach { date ->
+             val planners=plannerItems.filter { it.date==date }
+             val externals=externalEvents.filter { CalendarDayProjection.occursOn(date,it,zone) }
+-            item(key="heading-$date") { Text(date.format(DateTimeFormatter.ofPattern("EEE d MMM")),style=MaterialTheme.typography.titleMedium) }
++            item(key="heading-$date") { Text(formatDirectiveDate(date),style=MaterialTheme.typography.titleMedium) }
+             val allDayPlanner=planners.filter { plannerIsAllDay(it,date,zone) }
+             val allDayExternal=externals.filter { it.allDay }
+             if(allDayPlanner.isNotEmpty() || allDayExternal.isNotEmpty()) {
+@@ -317,7 +322,7 @@
+     if(cursor<end) out+=cursor to end
+     return out
+ }
+-private fun minuteLabel(value:Int):String = "%02d:%02d".format((value.coerceIn(0,1439))/60,(value.coerceIn(0,1439))%60)
++private fun minuteLabel(value:Int):String = formatDirectiveMinuteOfDay(value.coerceIn(0,1440))
+ 
+ @Composable
+ private fun ResizeDurationDialog(item:CalendarPlannerItem,onDismiss:()->Unit,onConfirm:(Int)->Unit) {
+@@ -355,7 +360,7 @@
+                 OutlinedCard(Modifier.fillMaxWidth()) {
+                     Column(Modifier.padding(12.dp)) {
+                         Text(event.title)
+-                        Text(if (event.allDay) "External • All day • ${start.toLocalDate()}" else "External • ${start.toLocalDate()} ${start.toLocalTime()}–${end.toLocalTime()}", style = MaterialTheme.typography.bodySmall)
++                        Text(if (event.allDay) "External • All day • ${formatDirectiveDate(start.toLocalDate())}" else "External • ${formatDirectiveDate(start.toLocalDate())} ${formatDirectiveTime(start.toLocalTime())}–${formatDirectiveTime(end.toLocalTime())}", style = MaterialTheme.typography.bodySmall)
+                     }
+                 }
+             } else if(item!=null) {
+@@ -369,7 +374,7 @@
+                 ElevatedCard(onClick = { onEditTask(item.task.id) }, modifier = Modifier.fillMaxWidth()) {
+                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                         Text(item.task.title)
