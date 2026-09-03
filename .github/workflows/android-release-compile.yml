@@ -1,0 +1,110 @@
+name: DIRECTIVE Release Variant Compile
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: directive-release-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  release_compile:
+    name: Compile and verify release variant
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Reconstruct sealed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for p in 00 01 02 03 05 06 07 09 11 13; do test -f "sealed-source/part${p}.b64"; done
+          for p in 00 01 02 03; do test -f "sealed-patch/part${p}.b64"; done
+          mkdir -p directive-source directive-remediation/auditskill-patch
+          cp sealed-source/*.b64 directive-source/
+          cp sealed-patch/*.b64 directive-remediation/auditskill-patch/
+          { cat directive-source/part00.b64; cat directive-source/part01.b64; cat directive-source/part02.b64; head -c 16000 directive-source/part03.b64; cat directive-source/part05.b64; cat directive-source/part06.b64; cat directive-source/part07.b64; cat directive-source/part09.b64; cat directive-source/part11.b64; cat directive-source/part13.b64; } > /tmp/directive-source.b64
+          test "$(wc -c < /tmp/directive-source.b64)" -eq 121428
+          base64 --decode /tmp/directive-source.b64 > /tmp/directive-source.tar.gz
+          echo 'acdbdd612bd7370d9bbc7846a885dad811544c9b2020847bb452b542c08b532a  /tmp/directive-source.tar.gz' | sha256sum -c -
+          mkdir build-src
+          tar -xzf /tmp/directive-source.tar.gz -C build-src
+      - name: Apply proven convergence and acceptance remediations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 directive-remediation/apply_compile_convergence.py build-src
+          cat directive-remediation/auditskill-patch/part*.b64 > /tmp/auditskill.patch.gz.b64
+          base64 --decode /tmp/auditskill.patch.gz.b64 > /tmp/auditskill.patch.gz
+          rc=0; gzip -dc /tmp/auditskill.patch.gz > /tmp/auditskill.patch || rc=$?
+          test "$rc" -eq 0 -o "$rc" -eq 2
+          echo '113901b3bce3e282dcac908919fcf8d34d027a8e33a2443a7d07786eebccaaad  /tmp/auditskill.patch' | sha256sum -c -
+          (cd build-src && patch -p1 --batch < /tmp/auditskill.patch)
+          python3 directive-remediation/apply_calendar_compile_fix.py build-src
+          python3 directive-remediation/apply_backup_test_convergence.py build-src
+          python3 directive-remediation/apply_lint_activity_fix.py build-src
+          python3 directive-remediation/apply_runtime_acceptance_tests.py build-src
+      - name: Verify converged signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'val gridHeight=minuteHeight*(end-start).toFloat()' build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt
+          grep -Fq 'val activity = LocalActivity.current' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
+          grep -Fq 'schemaV2AttachmentWithoutPortableContentRejected' build-src/app/src/test/kotlin/com/example/directive/data/portability/BackupCodecTest.kt
+          grep -Fq 'compose.onNodeWithText("Calendar").performClick()' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
+          grep -Fq 'explicitReminderDeliveryPersistsFiredState' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+      - name: Materialise authenticated Gradle wrapper
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 9.5.1 --distribution-type bin
+          echo '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar' | sha256sum -c -
+          grep -q 'bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f' gradle/wrapper/gradle-wrapper.properties
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+      - name: Install API 37 build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager 'platform-tools' 'build-tools;37.0.0' 'platforms;android-37.0'
+      - name: Compile release variant
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee ../RELEASE_BUILD_LOG.txt
+      - name: Verify release variant artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_APK="$(find build-src/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          test -n "$RELEASE_APK"
+          mkdir -p release-artifact
+          cp "$RELEASE_APK" release-artifact/DIRECTIVE-1.0.0-release-unsigned.apk
+          cp RELEASE_BUILD_LOG.txt release-artifact/
+          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$RELEASE_APK" > release-artifact/RELEASE_APK_BADGING.txt
+          grep -q "package: name='com.example.directive' versionCode='1' versionName='1.0.0'" release-artifact/RELEASE_APK_BADGING.txt
+          unzip -t "$RELEASE_APK" > release-artifact/RELEASE_APK_ZIP_TEST.txt
+          sha256sum release-artifact/DIRECTIVE-1.0.0-release-unsigned.apk > release-artifact/SHA256SUMS.txt
+          printf 'release_variant_compile=PASS\nsigning_status=UNSIGNED_NOT_AUTHORISED_FOR_PRODUCTION_SIGNING\nsource_runtime_run=33738727129\n' > release-artifact/RELEASE_COMPILE_PROVENANCE.txt
+      - name: Upload release compile evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-release-compile
+          path: release-artifact/
+          if-no-files-found: error
+          retention-days: 30
