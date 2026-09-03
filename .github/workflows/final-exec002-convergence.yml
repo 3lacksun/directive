@@ -1,0 +1,306 @@
+name: DIRECTIVE Final EXEC002 Convergence
+
+on:
+  push:
+    paths:
+      - '.github/workflows/final-exec002-convergence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: directive-final-exec002
+  cancel-in-progress: true
+
+jobs:
+  final:
+    name: Final build, adaptive UI, reboot and runtime acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout convergence repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Reconstruct sealed authoritative baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p directive-source directive-remediation/auditskill-patch artifact
+          cp sealed-source/*.b64 directive-source/
+          cp sealed-patch/*.b64 directive-remediation/auditskill-patch/
+          { cat directive-source/part00.b64; cat directive-source/part01.b64; cat directive-source/part02.b64; head -c 16000 directive-source/part03.b64; cat directive-source/part05.b64; cat directive-source/part06.b64; cat directive-source/part07.b64; cat directive-source/part09.b64; cat directive-source/part11.b64; cat directive-source/part13.b64; } > /tmp/directive-source.b64
+          test "$(wc -c < /tmp/directive-source.b64)" -eq 121428
+          base64 --decode /tmp/directive-source.b64 > /tmp/directive-source.tar.gz
+          echo 'acdbdd612bd7370d9bbc7846a885dad811544c9b2020847bb452b542c08b532a  /tmp/directive-source.tar.gz' | sha256sum -c -
+          gzip -t /tmp/directive-source.tar.gz
+          mkdir build-src
+          tar -xzf /tmp/directive-source.tar.gz -C build-src
+
+      - name: Apply complete accepted convergence set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 directive-remediation/apply_compile_convergence.py build-src
+          cat directive-remediation/auditskill-patch/part*.b64 > /tmp/auditskill.patch.gz.b64
+          test "$(wc -c < /tmp/auditskill.patch.gz.b64)" -eq 30160
+          base64 --decode /tmp/auditskill.patch.gz.b64 > /tmp/auditskill.patch.gz
+          rc=0; gzip -dc /tmp/auditskill.patch.gz > /tmp/auditskill.patch || rc=$?
+          test "$rc" -eq 0 -o "$rc" -eq 2
+          echo '113901b3bce3e282dcac908919fcf8d34d027a8e33a2443a7d07786eebccaaad  /tmp/auditskill.patch' | sha256sum -c -
+          (cd build-src && patch -p1 --batch < /tmp/auditskill.patch)
+          python3 directive-remediation/apply_calendar_compile_fix.py build-src
+          python3 directive-remediation/apply_backup_test_convergence.py build-src
+          python3 directive-remediation/apply_lint_activity_fix.py build-src
+          python3 directive-remediation/apply_tasks_landscape_fix.py build-src
+          python3 directive-remediation/apply_runtime_acceptance_tests.py build-src
+          python3 directive-remediation/apply_reboot_test_nullability_fix.py build-src
+
+      - name: Verify final convergence signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f build-src/app/src/main/kotlin/com/example/directive/data/database/DirectiveDatabaseFactory.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveDatabaseFactoryInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveManifestIntegrationsInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRebootReminderInstrumentedTest.kt
+          grep -Fq 'contentDescription = "Quick Add"' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
+          grep -Fq 'val activity = LocalActivity.current' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
+          grep -Fq 'val gridHeight=minuteHeight*(end-start).toFloat()' build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt
+          grep -Fq 'contentPadding=PaddingValues(16.dp)' build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt
+          ! grep -Fq 'Column(modifier.fillMaxSize().padding(16.dp)' build-src/app/src/main/kotlin/com/example/directive/feature/tasks/TasksScreen.kt
+          grep -Fq 'performScrollTo().assertIsDisplayed()' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
+          grep -Fq 'seedFutureReminderForReboot' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRebootReminderInstrumentedTest.kt
+          grep -Fq 'verifyReminderRestoredAfterActualBoot' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRebootReminderInstrumentedTest.kt
+          grep -Fq 'value!!' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRebootReminderInstrumentedTest.kt
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Materialise authenticated Gradle wrapper and seal converged source
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 9.5.1 --distribution-type bin
+          echo '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar' | sha256sum -c -
+          grep -q 'gradle-9.5.1-bin.zip' gradle/wrapper/gradle-wrapper.properties
+          grep -q 'bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f' gradle/wrapper/gradle-wrapper.properties
+          find . -type f ! -path './.gradle/*' ! -path './app/build/*' ! -path './build/*' -print0 | sort -z | xargs -0 sha256sum > ../artifact/FINAL_SOURCE_SHA256SUMS.txt
+          tar --exclude='./.gradle' --exclude='./app/build' --exclude='./build' -czf ../artifact/DIRECTIVE_EXEC002_CONVERGED_SOURCE.tar.gz .
+          sha256sum ../artifact/DIRECTIVE_EXEC002_CONVERGED_SOURCE.tar.gz > ../artifact/SOURCE_ARCHIVE_SHA256.txt
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+
+      - name: Install Android 17 API 37 build and emulator toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-37.0;google_apis;x86_64'
+          sdkmanager 'platform-tools' 'emulator' 'build-tools;37.0.0' 'platforms;android-37.0' "$IMAGE"
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          echo no | avdmanager create avd --force --name directive-final-api37 --package "$IMAGE"
+          printf '%s\n' "$IMAGE" > artifact/EMULATOR_PACKAGE.txt
+
+      - name: Unit tests, lint, debug, AndroidTest and full R8 release build
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease 2>&1 | tee ../artifact/FINAL_GRADLE_BUILD_LOG.txt
+
+      - name: Verify all Android build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build-src/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=build-src/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          RELEASE_APK="$(find build-src/app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          BT="$ANDROID_HOME/build-tools/37.0.0"
+          test -f "$APK"; test -f "$TEST_APK"; test -f "$RELEASE_APK"
+          cp "$APK" artifact/DIRECTIVE-1.0.0-debug.apk
+          cp "$TEST_APK" artifact/DIRECTIVE-1.0.0-androidTest.apk
+          cp "$RELEASE_APK" artifact/DIRECTIVE-1.0.0-release-unsigned.apk
+          "$BT/aapt" dump badging "$APK" > artifact/DEBUG_APK_BADGING.txt
+          "$BT/aapt" dump badging "$TEST_APK" > artifact/ANDROIDTEST_APK_BADGING.txt
+          "$BT/aapt" dump badging "$RELEASE_APK" > artifact/RELEASE_APK_BADGING.txt
+          grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/DEBUG_APK_BADGING.txt
+          grep -q "package: name='com.example.directive' versionCode='1' versionName='1.0.0'" artifact/RELEASE_APK_BADGING.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$APK" > artifact/DEBUG_ZIPALIGN.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$RELEASE_APK" > artifact/RELEASE_ZIPALIGN.txt
+          "$BT/apksigner" verify --verbose --print-certs "$APK" > artifact/DEBUG_APK_SIGNATURE.txt
+          unzip -t "$APK" > artifact/DEBUG_APK_ZIP_TEST.txt
+          unzip -t "$TEST_APK" > artifact/ANDROIDTEST_APK_ZIP_TEST.txt
+          unzip -t "$RELEASE_APK" > artifact/RELEASE_APK_ZIP_TEST.txt
+          sha256sum artifact/DIRECTIVE-1.0.0-debug.apk artifact/DIRECTIVE-1.0.0-androidTest.apk artifact/DIRECTIVE-1.0.0-release-unsigned.apk > artifact/APK_SHA256SUMS.txt
+
+      - name: Boot clean Android 17 API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-final-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$boot" = '1' ] && break
+            sleep 2
+          done
+          test "$boot" = '1'
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          {
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell getprop ro.product.cpu.abi
+            adb shell getprop ro.product.cpu.pagesize.max
+          } | tee artifact/EMULATOR_PROPERTIES.txt
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '37'
+
+      - name: Clean install and cold launch final debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb uninstall com.example.directive.debug >/dev/null 2>&1 || true
+          ! adb shell pm path com.example.directive.debug 2>/dev/null | grep -q package
+          adb install artifact/DIRECTIVE-1.0.0-debug.apk | tee artifact/CLEAN_INSTALL.txt
+          grep -q 'Success' artifact/CLEAN_INSTALL.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n 1 | tr -d '\r')"
+          test -n "$COMPONENT"
+          printf '%s\n' "$COMPONENT" > artifact/LAUNCH_COMPONENT.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/COLD_LAUNCH.txt
+          grep -q 'Status: ok' artifact/COLD_LAUNCH.txt
+          adb shell am force-stop com.example.directive.debug
+
+      - name: Install AndroidTest APK and discover real instrumentation runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb install artifact/DIRECTIVE-1.0.0-androidTest.apk | tee artifact/ANDROIDTEST_INSTALL.txt
+          grep -q 'Success' artifact/ANDROIDTEST_INSTALL.txt
+          adb shell pm grant com.example.directive.debug android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          adb shell pm list instrumentation | tr -d '\r' | tee artifact/INSTRUMENTATION_LIST.txt
+          RUNNER="$(awk '/\(target=com.example.directive.debug\)/ {v=$1; sub(/^instrumentation:/,"",v); print v; exit}' artifact/INSTRUMENTATION_LIST.txt)"
+          test -n "$RUNNER"
+          printf '%s\n' "$RUNNER" > artifact/INSTRUMENTATION_COMPONENT.txt
+
+      - name: Execute core production runtime instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          CORE='com.example.directive.DirectiveDatabaseFactoryInstrumentedTest,com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest,com.example.directive.DirectiveManifestIntegrationsInstrumentedTest,com.example.directive.DirectiveRuntimeBehaviourInstrumentedTest'
+          set -o pipefail
+          adb shell am instrument -w -e class "$CORE" "$RUNNER" | tee artifact/CORE_RUNTIME.txt
+          ! grep -q 'FAILURES!!!' artifact/CORE_RUNTIME.txt
+          ! grep -q 'INSTRUMENTATION_FAILED' artifact/CORE_RUNTIME.txt
+          grep -Eq 'OK \([0-9]+ tests?\)' artifact/CORE_RUNTIME.txt
+
+      - name: Verify light theme and 150 percent font scale
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          CLASS='com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest'
+          adb shell cmd uimode night no
+          adb shell settings put system font_scale 1.5
+          sleep 2
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/LIGHT_FONT_150_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/LIGHT_FONT_150_UI.txt
+          ! grep -q 'FAILURES!!!' artifact/LIGHT_FONT_150_UI.txt
+
+      - name: Verify tablet sized adaptive layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          CLASS='com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest'
+          adb shell settings put system font_scale 1.0
+          adb shell wm size 1600x2560
+          adb shell wm density 320
+          sleep 2
+          adb shell wm size | tee artifact/TABLET_SIZE.txt
+          adb shell wm density | tee artifact/TABLET_DENSITY.txt
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/TABLET_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/TABLET_UI.txt
+          ! grep -q 'FAILURES!!!' artifact/TABLET_UI.txt
+
+      - name: Verify landscape adaptive layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          CLASS='com.example.directive.DirectiveLaunchAccessibilityInstrumentedTest'
+          adb shell wm size reset
+          adb shell wm density reset
+          adb shell settings put system accelerometer_rotation 0
+          adb shell settings put system user_rotation 1
+          sleep 2
+          adb shell wm size | tee artifact/LANDSCAPE_SIZE.txt
+          adb shell am instrument -w -e class "$CLASS" "$RUNNER" | tee artifact/LANDSCAPE_UI.txt
+          grep -Eq 'OK \(2 tests?\)' artifact/LANDSCAPE_UI.txt
+          ! grep -q 'FAILURES!!!' artifact/LANDSCAPE_UI.txt
+
+      - name: Seed future reminder for actual reboot recovery test
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          TEST='com.example.directive.DirectiveRebootReminderInstrumentedTest#seedFutureReminderForReboot'
+          adb shell am instrument -w -e class "$TEST" "$RUNNER" | tee artifact/REBOOT_SEED.txt
+          grep -Eq 'OK \(1 test\)' artifact/REBOOT_SEED.txt
+          ! grep -q 'FAILURES!!!' artifact/REBOOT_SEED.txt
+
+      - name: Perform actual Android reboot and verify reminder restoration
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER="$(cat artifact/INSTRUMENTATION_COMPONENT.txt)"
+          adb reboot
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$boot" = '1' ] && break
+            sleep 2
+          done
+          test "$boot" = '1'
+          sleep 8
+          TEST='com.example.directive.DirectiveRebootReminderInstrumentedTest#verifyReminderRestoredAfterActualBoot'
+          adb shell am instrument -w -e class "$TEST" "$RUNNER" | tee artifact/REBOOT_RESTORE.txt
+          grep -Eq 'OK \(1 test\)' artifact/REBOOT_RESTORE.txt
+          ! grep -q 'FAILURES!!!' artifact/REBOOT_RESTORE.txt
+          COMPONENT="$(cat artifact/LAUNCH_COMPONENT.txt)"
+          adb shell am start -W -n "$COMPONENT" | tee artifact/POST_REBOOT_LAUNCH.txt
+          grep -q 'Status: ok' artifact/POST_REBOOT_LAUNCH.txt
+
+      - name: Write final EXEC002 provenance
+        if: always()
+        shell: bash
+        run: |
+          printf 'repository=%s\ncommit=%s\nrun_id=%s\nversion_name=1.0.0\nversion_code=1\ndebug_package=com.example.directive.debug\nrelease_package=com.example.directive\ncompile_sdk=37\ntarget_sdk=37\njava=21\ngradle=9.5.1\nwrapper_sha256=%s\nbase_source_sha256=%s\nstatus_steps_are_authoritative=true\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7' '61abfda3a6e1de611afa1a755fa1999c2491069a9e1e42b9afcf423805406d06' > artifact/FINAL_EXEC002_PROVENANCE.txt
+
+      - name: Upload final EXEC002 convergence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-final-exec002-convergence
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
