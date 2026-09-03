@@ -27,23 +27,23 @@ class DirectiveLaunchAccessibilityInstrumentedTest {
     }
 
     @Test fun primaryNavigationDestinationsRender() {
-        compose.onNodeWithContentDescription("Calendar").performClick()
+        compose.onNodeWithText("Calendar").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Previous").assertIsDisplayed()
 
-        compose.onNodeWithContentDescription("Tasks").performClick()
+        compose.onNodeWithText("Tasks").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Filters").assertIsDisplayed()
 
-        compose.onNodeWithContentDescription("Plan").performClick()
+        compose.onNodeWithText("Plan").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Master Plan").assertIsDisplayed()
 
-        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("More").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Dr Christopher Stone").assertIsDisplayed()
 
-        compose.onNodeWithContentDescription("Today").performClick()
+        compose.onNodeWithText("Today").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("D I R E C T I V E").assertIsDisplayed()
     }
@@ -70,7 +70,6 @@ import com.example.directive.domain.model.RepeatMode
 import com.example.directive.domain.recurrence.RecurrenceEngine
 import com.example.directive.domain.recurrence.RecurrenceRule
 import com.example.directive.notifications.ReminderReceiver
-import java.time.Duration
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import kotlinx.coroutines.delay
