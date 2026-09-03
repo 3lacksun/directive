@@ -1,0 +1,73 @@
+                 }
+                 TextButton(onClick=vm::nextDay){Text("›",color=Porcelain)}
+@@ -65,7 +69,7 @@
+         state.calendarMessage?.let { message -> item { Text(message,color=MutedText,style=MaterialTheme.typography.bodySmall) } }
+         item {
+             SectionLabel("TODAY'S AGENDA")
+-            state.currentTime?.let { Text("Current time $it",color=SignalLime,style=MaterialTheme.typography.labelSmall) }
++            state.currentTime?.let { Text("Current time ${formatDirectiveTime(it)}",color=SignalLime,style=MaterialTheme.typography.labelSmall) }
+         }
+         items(state.agenda,key={entry->entry.planner?.let{"planner-${it.item.planTaskId}"} ?: entry.external?.let{"external-${it.id}-${it.startMillis}"} ?: "agenda-${entry.minuteOfDay}"}){entry->
+             val item=entry.planner
+@@ -74,7 +78,7 @@
+                 SwipeActionCard(onSwipeRight={vm.complete(item.item)},onSwipeLeft={vm.reschedule(item.item,state.date.plusDays(1))}) {
+                     DarkCard {
+                         Column(verticalArrangement=Arrangement.spacedBy(6.dp)){
+-                            Text("${item.plan.scheduledStartLocal}  ${item.task.title}",color=Porcelain)
++                            Text("${parseStoredLocalTime(item.plan.scheduledStartLocal)?.let(::formatDirectiveTime) ?: item.plan.scheduledStartLocal}  ${item.task.title}",color=Porcelain)
+                             if(item.item.planTaskId in state.conflictingTaskIds) Text("Schedule conflict",color=SignalLime,style=MaterialTheme.typography.labelMedium)
+                             Text("Swipe right to complete • left to move to tomorrow",color=MutedText,style=MaterialTheme.typography.labelSmall)
+                             Row(horizontalArrangement=Arrangement.spacedBy(2.dp)){
+@@ -107,9 +111,9 @@
+                     Column{
+                         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(item.task.title,color=Porcelain);TextButton(onClick={onEditTask(item.task.id)}){Text("Edit")}}
+                         Row{
+-                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(9,0))}){Text("09:00")}
+-                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(12,0))}){Text("12:00")}
+-                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(15,0))}){Text("15:00")}
++                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(9,0))}){Text(formatDirectiveTime(LocalTime.of(9,0)))}
++                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(12,0))}){Text(formatDirectiveTime(LocalTime.of(12,0)))}
++                            TextButton(onClick={vm.moveToTime(item,LocalTime.of(15,0))}){Text(formatDirectiveTime(LocalTime.of(15,0)))}
+                         }
+                         TextButton(onClick={vm.complete(item)}){Text("Executed")}
+                     }
+@@ -153,4 +157,4 @@
+ @Composable private fun DarkCard(content:@Composable ColumnScope.()->Unit){Surface(color=PanelBlack,shape=MaterialTheme.shapes.large){Column(Modifier.fillMaxWidth().padding(14.dp),content=content)}}
+ @Composable private fun TaskLine(title:String,actionLabel:String,action:()->Unit,secondaryLabel:String?=null,secondary:(()->Unit)?=null){DarkCard{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(title,color=Porcelain,modifier=Modifier.weight(1f));TextButton(onClick=action){Text(actionLabel)};if(secondaryLabel!=null && secondary!=null) TextButton(onClick=secondary){Text(secondaryLabel)}}}}
+ 
+-private fun minuteLabel(value:Int):String = if(value>=1440) "24:00" else "%02d:%02d".format(value.coerceAtLeast(0)/60,value.coerceAtLeast(0)%60)
++private fun minuteLabel(value:Int):String = formatDirectiveMinuteOfDay(value.coerceIn(0,1440))
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/ui/Screens.kt source/app/src/main/kotlin/com/example/directive/ui/Screens.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/ui/Screens.kt	2026-09-03 10:17:14.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/ui/Screens.kt	2026-09-03 18:08:57.295857762 +0000
+@@ -16,6 +16,8 @@
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.lifecycle.viewmodel.compose.viewModel
+ import com.example.directive.feature.more.MoreViewModel
++import com.example.directive.ui.components.DirectiveMinuteOfDayPickerField
++import com.example.directive.ui.components.formatDirectiveDate
+ import com.example.directive.domain.model.TemplateType
+ import kotlin.math.roundToInt
+ 
+@@ -115,7 +117,7 @@
+                         Text("Completed workload ${analytics.completedMinutes}m • planned workload ${analytics.plannedMinutes}m • rescheduled ${analytics.rescheduleCount}")
+                         analytics.busiestWeekday?.let { Text("Busiest completion day: ${it.name.lowercase().replaceFirstChar(Char::uppercase)}") }
+                         if (analytics.categoryCompleted.isNotEmpty()) Text(analytics.categoryCompleted.entries.joinToString(" • ") { "${it.key} ${it.value}" }, style = MaterialTheme.typography.bodySmall)
+-                        analytics.completionByDay.entries.lastOrNull()?.let { Text("Latest day ${it.key}: ${it.value} completed", style = MaterialTheme.typography.bodySmall) }
++                        analytics.completionByDay.entries.lastOrNull()?.let { row -> val shown=runCatching { java.time.LocalDate.parse(row.key) }.getOrNull()?.let(::formatDirectiveDate) ?: row.key; Text("Latest day $shown: ${row.value} completed", style = MaterialTheme.typography.bodySmall) }
+                         analytics.completionByWeek.entries.lastOrNull()?.let { Text("Latest week ${it.key}: ${it.value} completed", style = MaterialTheme.typography.bodySmall) }
+                         analytics.completionByMonth.entries.lastOrNull()?.let { Text("Latest month ${it.key}: ${it.value} completed", style = MaterialTheme.typography.bodySmall) }
+                     }
+@@ -131,24 +133,24 @@
+                     Text("Reminders",style=MaterialTheme.typography.labelLarge)
+                     Text("Default lead time and snooze duration are configured below.",style=MaterialTheme.typography.bodySmall)
+                     var duration by remember(prefs.defaultDurationMinutes) { mutableStateOf(prefs.defaultDurationMinutes.toString()) }
+-                    var planStart by remember(prefs.planningDayStartMinutes) { mutableStateOf(minutesToTime(prefs.planningDayStartMinutes)) }
+-                    var planEnd by remember(prefs.planningDayEndMinutes) { mutableStateOf(minutesToTime(prefs.planningDayEndMinutes)) }
++                    var planStartMinutes by remember(prefs.planningDayStartMinutes) { mutableIntStateOf(prefs.planningDayStartMinutes) }
++                    var planEndMinutes by remember(prefs.planningDayEndMinutes) { mutableIntStateOf(prefs.planningDayEndMinutes) }
+                     var workingEnabled by remember(prefs.workingHoursEnabled) { mutableStateOf(prefs.workingHoursEnabled) }
+-                    var workingStart by remember(prefs.workingDayStartMinutes) { mutableStateOf(minutesToTime(prefs.workingDayStartMinutes)) }
+-                    var workingEnd by remember(prefs.workingDayEndMinutes) { mutableStateOf(minutesToTime(prefs.workingDayEndMinutes)) }
++                    var workingStartMinutes by remember(prefs.workingDayStartMinutes) { mutableIntStateOf(prefs.workingDayStartMinutes) }
++                    var workingEndMinutes by remember(prefs.workingDayEndMinutes) { mutableIntStateOf(prefs.workingDayEndMinutes) }
