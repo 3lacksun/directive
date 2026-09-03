@@ -60,7 +60,9 @@ jobs:
         run: python3 directive-remediation/apply_backup_test_convergence.py build-src
       - name: Remediate LocalActivity lint error
         run: python3 directive-remediation/apply_lint_activity_fix.py build-src
-      - name: Verify REM002 signatures
+      - name: Add runtime acceptance instrumentation
+        run: python3 directive-remediation/apply_runtime_acceptance_tests.py build-src
+      - name: Verify REM002 and acceptance signatures
         shell: bash
         run: |
           set -euo pipefail
@@ -68,6 +70,7 @@ jobs:
           test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveDatabaseFactoryInstrumentedTest.kt
           test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
           test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveManifestIntegrationsInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
           grep -q 'contentDescription = "Quick Add"' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
           grep -q 'DirectiveDatabaseFactory.build' build-src/app/src/main/kotlin/com/example/directive/widget/TodayWidget.kt
           grep -q 'const val CURRENT_SCHEMA = 2' build-src/app/src/main/kotlin/com/example/directive/data/portability/BackupModels.kt
@@ -80,6 +83,10 @@ jobs:
           grep -Fq 'import androidx.activity.compose.LocalActivity' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
           grep -Fq 'val activity = LocalActivity.current' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
           ! grep -Fq 'LocalContext.current as? Activity' build-src/app/src/main/kotlin/com/example/directive/ui/DirectiveApp.kt
+          grep -Fq 'primaryNavigationDestinationsRender' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
+          grep -Fq 'explicitReminderDeliveryPersistsFiredState' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
+          grep -Fq 'backupV2RoundTripsPortableAttachmentPayload' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
+          grep -Fq 'afterCompletionRecurrenceIsSingleCompletionRelativeAndBudgetBounded' build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveRuntimeBehaviourInstrumentedTest.kt
       - name: Set up Gradle 9.5.1
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -126,6 +133,7 @@ jobs:
           cp "$TEST_APK" artifact/DIRECTIVE-1.0.0-androidTest.apk
           cp GRADLE_BUILD_LOG.txt artifact/
           "$BT/aapt" dump badging "$APK" > artifact/APK_BADGING.txt
+          "$BT/aapt" dump badging "$TEST_APK" > artifact/ANDROIDTEST_APK_BADGING.txt
           grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/APK_BADGING.txt
           "$BT/zipalign" -c -P 16 -v 4 "$APK" > artifact/ZIPALIGN.txt
           "$BT/apksigner" verify --verbose --print-certs "$APK" > artifact/APK_SIGNATURE.txt
@@ -137,6 +145,86 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: directive-android-build
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Discover and install Android 17 x86_64 emulator image
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --list > /tmp/sdk-packages.txt
+          grep 'system-images;android-37\.0;.*;x86_64' /tmp/sdk-packages.txt > /tmp/api37-images.txt || true
+          cat /tmp/api37-images.txt
+          IMAGE="$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); if ($1 ~ /google_apis/ && $1 ~ /x86_64/) {print $1; exit}}' /tmp/api37-images.txt)"
+          if [ -z "$IMAGE" ]; then IMAGE="$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); if ($1 ~ /x86_64/) {print $1; exit}}' /tmp/api37-images.txt)"; fi
+          test -n "$IMAGE"
+          mkdir -p artifact
+          printf '%s\n' "$IMAGE" | tee artifact/EMULATOR_PACKAGE.txt
+          sdkmanager "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-api37 --package "$IMAGE"
+      - name: Boot Android 17 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$boot" = '1' ] && break
+            sleep 2
+          done
+          test "$boot" = '1'
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          {
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell getprop ro.product.cpu.abi
+            adb shell getprop ro.product.cpu.pagesize.max
+          } | tee artifact/EMULATOR_PROPERTIES.txt
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '37'
+      - name: Clean install and launch DIRECTIVE
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=artifact/DIRECTIVE-1.0.0-debug.apk
+          adb uninstall com.example.directive.debug >/dev/null 2>&1 || true
+          if adb shell pm path com.example.directive.debug 2>/dev/null | grep -q package; then echo 'Target package still installed after uninstall' >&2; exit 1; fi
+          adb install "$APK" | tee artifact/CLEAN_INSTALL.txt
+          grep -q 'Success' artifact/CLEAN_INSTALL.txt
+          adb shell pm path com.example.directive.debug | tee -a artifact/CLEAN_INSTALL.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n 1 | tr -d '\r')"
+          test -n "$COMPONENT"
+          adb shell am start -W -n "$COMPONENT" | tee artifact/CLEAN_LAUNCH.txt
+          grep -q 'Status: ok' artifact/CLEAN_LAUNCH.txt
+          adb shell am force-stop com.example.directive.debug
+      - name: Execute Android runtime and instrumentation acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_APK=artifact/DIRECTIVE-1.0.0-androidTest.apk
+          BT="$ANDROID_HOME/build-tools/37.0.0"
+          TEST_PACKAGE="$(sed -n "s/package: name='\([^']*\)'.*/\1/p" artifact/ANDROIDTEST_APK_BADGING.txt | head -n 1)"
+          RUNNER="$(sed -n "s/instrumentation: name='\([^']*\)'.*/\1/p" artifact/ANDROIDTEST_APK_BADGING.txt | head -n 1)"
+          test -n "$TEST_PACKAGE"
+          test -n "$RUNNER"
+          adb install "$TEST_APK" | tee artifact/ANDROIDTEST_INSTALL.txt
+          grep -q 'Success' artifact/ANDROIDTEST_INSTALL.txt
+          adb shell pm grant com.example.directive.debug android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          set -o pipefail
+          adb shell am instrument -w "$TEST_PACKAGE/$RUNNER" | tee artifact/INSTRUMENTATION_RUNTIME.txt
+          ! grep -q 'FAILURES!!!' artifact/INSTRUMENTATION_RUNTIME.txt
+          ! grep -q 'INSTRUMENTATION_FAILED' artifact/INSTRUMENTATION_RUNTIME.txt
+          grep -Eq 'OK \([0-9]+ tests?\)' artifact/INSTRUMENTATION_RUNTIME.txt
+      - name: Upload runtime acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-android-runtime
           path: artifact/
           if-no-files-found: error
           retention-days: 30
