@@ -56,6 +56,8 @@ jobs:
           (cd build-src && patch -p1 --batch < /tmp/auditskill.patch)
       - name: Apply Android acceptance compile remediation
         run: python3 directive-remediation/apply_calendar_compile_fix.py build-src
+      - name: Align backup v2 unit test with portable payload contract
+        run: python3 directive-remediation/apply_backup_test_convergence.py build-src
       - name: Verify REM002 signatures
         shell: bash
         run: |
@@ -71,6 +73,8 @@ jobs:
           grep -q 'RecurrenceService' build-src/app/src/main/kotlin/com/example/directive/notifications/ReminderActionReceiver.kt
           grep -Fq 'val gridHeight=minuteHeight*(end-start).toFloat()' build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt
           grep -Fq 'if(cardHeight.value>=70f)' build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarScreen.kt
+          grep -Fq 'val payload = BackupAttachmentPayload("a", "eA==")' build-src/app/src/test/kotlin/com/example/directive/data/portability/BackupCodecTest.kt
+          grep -Fq 'schemaV2AttachmentWithoutPortableContentRejected' build-src/app/src/test/kotlin/com/example/directive/data/portability/BackupCodecTest.kt
       - name: Set up Gradle 9.5.1
         uses: gradle/actions/setup-gradle@v4
         with:
