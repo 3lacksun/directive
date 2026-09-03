@@ -1,0 +1,23 @@
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' /mnt/data/directive_ci_sim/build-src/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt source/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt
+--- a/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt	2026-09-03 18:19:56.250693594 +0000
++++ b/app/src/main/kotlin/com/example/directive/feature/calendar/CalendarViewModel.kt	2026-09-03 18:26:46.155445866 +0000
+@@ -240,6 +240,6 @@
+             updatedAt = now,
+         )
+         if (sourceDate == null || sourceDate == targetDate) planRepository.place(target) else planRepository.move(planTaskId, sourceDate, target)
+-        message.value = "${task.title} moved to ${formatDirectiveDate(targetDate)}${time?.let { " at ${formatDirectiveTime(it)}" } ?: ""}."
++        message.value = "${task.title} moved to ${formatDirectiveDate(date)}${time?.let { " at ${formatDirectiveTime(it)}" } ?: ""}."
+     }
+ }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' /mnt/data/directive_ci_sim/build-src/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt source/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt
+--- a/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt	2026-09-03 18:19:56.251158455 +0000
++++ b/app/src/main/kotlin/com/example/directive/feature/plan/PlanViewModel.kt	2026-09-03 18:26:46.155664563 +0000
+@@ -264,7 +264,7 @@
+         val shifted = LocalTime.of(shiftedMinute / 60, shiftedMinute % 60)
+         planRepository.place(entry.copy(scheduledStartLocal = shifted.toString(), planningSource = PlanningSource.MANUAL, updatedAt = System.currentTimeMillis()))
+         preview.value = null
+-        message.value="Plan time adjusted to ${formatDirectiveMinuteOfDay(shifted)}."
++        message.value="Plan time adjusted to ${formatDirectiveTime(shifted)}."
+     }
+ 
+     fun moveOrder(entry: PlanEntryEntity, direction: Int) = viewModelScope.launch {
