@@ -1,0 +1,149 @@
+name: DIRECTIVE Android Acceptance Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: directive-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and verify DIRECTIVE APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Retrieve sealed reconstruction payload from GitHub
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p directive-source directive-remediation/auditskill-patch
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part00.b64?token=CMNAELQWCDOY73QHC3DSOHDKTD7A5AA' -o directive-source/part00.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part01.b64?token=CMNAELQSK6VY6PK4YEN4EEDKTD7A5AA' -o directive-source/part01.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part02.b64?token=CMNAELQCBPQRD4F7CGDCRG3KTD7A5AA' -o directive-source/part02.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part03.b64?token=CMNAELQAKL6JUZ3EWYONZ5DKTD7A5AA' -o directive-source/part03.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part05.b64?token=CMNAELUQDBVML7DUSESJOG3KTD7A5AA' -o directive-source/part05.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part06.b64?token=CMNAELV5LCXFRND36OVK7CTKTD7A5AA' -o directive-source/part06.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part07.b64?token=CMNAELRKO76FFKYHSF5QIDLKTD7A5AA' -o directive-source/part07.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part09.b64?token=CMNAELW47VTJBNIVUFX72HDKTD7A5AA' -o directive-source/part09.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part11.b64?token=CMNAELSSV7KDZTMKHCUNT6DKTD7A5AA' -o directive-source/part11.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-source/part13.b64?token=CMNAELQH4OILRQZVZAP7PUTKTD7A5AA' -o directive-source/part13.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part00.b64?token=CMNAELQUDKX7DCDFDVK7L33KTD7BLAA' -o directive-remediation/auditskill-patch/part00.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part01.b64?token=CMNAELUBC37RV37DFUDTPX3KTD7BLAA' -o directive-remediation/auditskill-patch/part01.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part02.b64?token=CMNAELW4UR3F7NJOCPRAWYTKTD7BLAA' -o directive-remediation/auditskill-patch/part02.b64
+          curl -fsSL --retry 3 'https://raw.githubusercontent.com/3lacksun/repflow-android-build/directive-rem002-03092026/directive-remediation/auditskill-patch/part03.b64?token=CMNAELQV5J3TB4TWXXVUBE3KTD7BLAA' -o directive-remediation/auditskill-patch/part03.b64
+
+      - name: Reconstruct verified compiler-converged baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          { cat directive-source/part00.b64; cat directive-source/part01.b64; cat directive-source/part02.b64; head -c 16000 directive-source/part03.b64; cat directive-source/part05.b64; cat directive-source/part06.b64; cat directive-source/part07.b64; cat directive-source/part09.b64; cat directive-source/part11.b64; cat directive-source/part13.b64; } > /tmp/directive-source.b64
+          test "$(wc -c < /tmp/directive-source.b64)" -eq 121428
+          base64 --decode /tmp/directive-source.b64 > /tmp/directive-source.tar.gz
+          echo 'acdbdd612bd7370d9bbc7846a885dad811544c9b2020847bb452b542c08b532a  /tmp/directive-source.tar.gz' | sha256sum -c -
+          gzip -t /tmp/directive-source.tar.gz
+          mkdir build-src
+          tar -xzf /tmp/directive-source.tar.gz -C build-src
+
+      - name: Apply proven compiler convergence
+        run: python3 directive-remediation/apply_compile_convergence.py build-src
+
+      - name: Apply AuditSkill REM002 remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat directive-remediation/auditskill-patch/part*.b64 > /tmp/auditskill.patch.gz.b64
+          test "$(wc -c < /tmp/auditskill.patch.gz.b64)" -eq 30160
+          base64 --decode /tmp/auditskill.patch.gz.b64 > /tmp/auditskill.patch.gz
+          gzip -dc /tmp/auditskill.patch.gz > /tmp/auditskill.patch
+          echo '113901b3bce3e282dcac908919fcf8d34d027a8e33a2443a7d07786eebccaaad  /tmp/auditskill.patch' | sha256sum -c -
+          (cd build-src && patch -p1 --batch < /tmp/auditskill.patch)
+
+      - name: Verify REM002 signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f build-src/app/src/main/kotlin/com/example/directive/data/database/DirectiveDatabaseFactory.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveDatabaseFactoryInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveLaunchAccessibilityInstrumentedTest.kt
+          test -f build-src/app/src/androidTest/kotlin/com/example/directive/DirectiveManifestIntegrationsInstrumentedTest.kt
+          grep -q 'contentDescription = "Quick Add"' build-src/app/src/main/kotlin/com/example/directive/ui/Screens.kt
+          grep -q 'DirectiveDatabaseFactory.build' build-src/app/src/main/kotlin/com/example/directive/widget/TodayWidget.kt
+          grep -q 'BackupPayload.CURRENT_SCHEMA_VERSION' build-src/app/src/main/kotlin/com/example/directive/data/portability/BackupService.kt
+          grep -q 'RecurrenceService' build-src/app/src/main/kotlin/com/example/directive/notifications/ReminderActionReceiver.kt
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Materialise authenticated Gradle wrapper
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 9.5.1 --distribution-type bin
+          echo '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle/wrapper/gradle-wrapper.jar' | sha256sum -c -
+          grep -q 'gradle-9.5.1-bin.zip' gradle/wrapper/gradle-wrapper.properties
+          grep -q 'bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f' gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager 'platform-tools' 'build-tools;36.0.0' 'platforms;android-37'
+
+      - name: Unit test, lint and assemble APKs
+        working-directory: build-src
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest 2>&1 | tee ../GRADLE_BUILD_LOG.txt
+
+      - name: Verify Android artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build-src/app/build/outputs/apk/debug/app-debug.apk
+          TEST_APK=build-src/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          test -f "$APK"
+          test -f "$TEST_APK"
+          mkdir -p artifact
+          cp "$APK" artifact/DIRECTIVE-1.0.0-debug.apk
+          cp "$TEST_APK" artifact/DIRECTIVE-1.0.0-androidTest.apk
+          cp GRADLE_BUILD_LOG.txt artifact/
+          "$BT/aapt" dump badging "$APK" > artifact/APK_BADGING.txt
+          grep -q "package: name='com.example.directive.debug' versionCode='1' versionName='1.0.0'" artifact/APK_BADGING.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$APK" > artifact/ZIPALIGN.txt
+          "$BT/apksigner" verify --verbose --print-certs "$APK" > artifact/APK_SIGNATURE.txt
+          unzip -t "$APK" > artifact/APK_ZIP_TEST.txt
+          unzip -t "$TEST_APK" > artifact/ANDROIDTEST_APK_ZIP_TEST.txt
+          sha256sum artifact/DIRECTIVE-1.0.0-debug.apk artifact/DIRECTIVE-1.0.0-androidTest.apk > artifact/SHA256SUMS.txt
+          printf 'repository=%s\ncommit=%s\nrun_id=%s\nsource_checkpoint=%s\nsource_sha256=%s\ngradle=9.5.1\nwrapper_sha256=%s\ncompile_sdk=37\ntarget_sdk=37\njava=21\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" 'DIRECTIVE_REM002_AUDITSKILL_WRAPPER_AUTHENTICATED_SOURCE_CHECKPOINT_03092026035205.zip' '61abfda3a6e1de611afa1a755fa1999c2491069a9e1e42b9afcf423805406d06' '497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7' > artifact/BUILD_PROVENANCE.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-android-build
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
