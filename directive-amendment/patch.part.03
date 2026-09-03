@@ -1,0 +1,96 @@
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/taskedit/QuickAddSheet.kt source/app/src/main/kotlin/com/example/directive/feature/taskedit/QuickAddSheet.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/taskedit/QuickAddSheet.kt	2026-09-02 15:47:48.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/taskedit/QuickAddSheet.kt	2026-09-03 18:10:01.826474909 +0000
+@@ -13,6 +13,8 @@
+ import androidx.compose.ui.unit.dp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.lifecycle.viewmodel.compose.viewModel
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
+ 
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+@@ -47,7 +49,7 @@
+                 ElevatedCard(Modifier.fillMaxWidth()) {
+                     Column(Modifier.padding(14.dp), verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                         Text(p.title.ifBlank { "Title needed" }, style=MaterialTheme.typography.titleMedium)
+-                        Text(listOfNotNull(p.date?.toString(),p.time?.toString(),p.durationMinutes?.let{"${it}m"},p.categoryName,p.priority.takeIf { it.name != "NORMAL" }?.name).joinToString(" • "), style=MaterialTheme.typography.bodySmall)
++                        Text(listOfNotNull(p.date?.let(::formatDirectiveDate),p.time?.let(::formatDirectiveTime),p.durationMinutes?.let{"${it}m"},p.categoryName,p.priority.takeIf { it.name != "NORMAL" }?.name).joinToString(" • "), style=MaterialTheme.typography.bodySmall)
+                         p.recurrence?.let { Text("Repeats: ${it.frequency.name.lowercase()}${if(it.interval>1) " every ${it.interval}" else ""}", style=MaterialTheme.typography.bodySmall) }
+                         p.reminder?.let { Text("Reminder: ${it.offsetMinutesBefore} minutes before", style=MaterialTheme.typography.bodySmall) }
+                         p.warnings.forEach { Text(it, color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.bodySmall) }
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/main/kotlin/com/example/directive/feature/taskedit/TaskEditorSheet.kt source/app/src/main/kotlin/com/example/directive/feature/taskedit/TaskEditorSheet.kt
+--- baseline_source/app/src/main/kotlin/com/example/directive/feature/taskedit/TaskEditorSheet.kt	2026-09-02 15:53:42.000000000 +0000
++++ source/app/src/main/kotlin/com/example/directive/feature/taskedit/TaskEditorSheet.kt	2026-09-03 18:08:36.766817284 +0000
+@@ -25,6 +25,10 @@
+ import androidx.lifecycle.viewmodel.compose.viewModel
+ import com.example.directive.domain.model.*
+ import com.example.directive.notifications.ExactAlarmAccess
++import com.example.directive.ui.components.DirectiveDatePickerField
++import com.example.directive.ui.components.DirectiveTimePickerField
++import com.example.directive.ui.components.formatDirectiveDate
++import com.example.directive.ui.components.formatDirectiveTime
+ import java.time.*
+ 
+ @OptIn(ExperimentalMaterial3Api::class)
+@@ -39,8 +43,10 @@
+ 
+     var checklistText by rememberSaveable{mutableStateOf("")}
+     var subtaskText by rememberSaveable{mutableStateOf("")}
+-    var fixedReminderDate by rememberSaveable{mutableStateOf("")}
+-    var fixedReminderTime by rememberSaveable{mutableStateOf("")}
++    var fixedReminderDateIso by rememberSaveable{mutableStateOf<String?>(null)}
++    var fixedReminderTimeIso by rememberSaveable{mutableStateOf<String?>(null)}
++    val fixedReminderDate=fixedReminderDateIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
++    val fixedReminderTime=fixedReminderTimeIso?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
+ 
+     val notificationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+     fun requestNotificationPermissionIfNeeded() {
+@@ -55,8 +61,8 @@
+         }
+     }
+     fun addFixedReminder(exact:Boolean) {
+-        val date=runCatching { LocalDate.parse(fixedReminderDate) }.getOrNull()
+-        val time=runCatching { LocalTime.parse(fixedReminderTime) }.getOrNull()
++        val date=fixedReminderDate
++        val time=fixedReminderTime
+         if(date!=null && time!=null) {
+             requestNotificationPermissionIfNeeded()
+             if(exact) requestExactAccessIfNeeded()
+@@ -108,8 +114,8 @@
+             item { Text("Plan placement",style=MaterialTheme.typography.labelLarge) }
+             item {
+                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+-                    OutlinedTextField(d.planDate?.toString() ?: "",{v->vm.updateDraft{it.copy(planDate=runCatching{LocalDate.parse(v)}.getOrNull())}},label={Text("Plan date")},modifier=Modifier.weight(1f),singleLine=true)
+-                    OutlinedTextField(d.planTime?.toString() ?: "",{v->vm.updateDraft{it.copy(planTime=runCatching{LocalTime.parse(v)}.getOrNull())}},label={Text("Plan time")},modifier=Modifier.weight(1f),singleLine=true)
++                    DirectiveDatePickerField("Plan date",d.planDate,{value->vm.updateDraft{it.copy(planDate=value)}},Modifier.weight(1f))
++                    DirectiveTimePickerField("Plan time",d.planTime,{value->vm.updateDraft{it.copy(planTime=value)}},Modifier.weight(1f))
+                 }
+             }
+             item { Text("Plan date/time is independent of the task start constraint and deadline.",style=MaterialTheme.typography.bodySmall) }
+@@ -117,8 +123,8 @@
+             item { Text("Start constraint",style=MaterialTheme.typography.labelLarge) }
+             item {
+                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+-                    OutlinedTextField(d.startDate?.toString() ?: "",{v->vm.updateDraft{it.copy(startDate=runCatching{LocalDate.parse(v)}.getOrNull())}},label={Text("Start date")},modifier=Modifier.weight(1f),singleLine=true)
+-                    OutlinedTextField(d.startTime?.toString() ?: "",{v->vm.updateDraft{it.copy(startTime=runCatching{LocalTime.parse(v)}.getOrNull())}},label={Text("Start time")},modifier=Modifier.weight(1f),singleLine=true)
++                    DirectiveDatePickerField("Start date",d.startDate,{value->vm.updateDraft{it.copy(startDate=value)}},Modifier.weight(1f))
++                    DirectiveTimePickerField("Start time",d.startTime,{value->vm.updateDraft{it.copy(startTime=value)}},Modifier.weight(1f))
+                 }
+             }
+             item { AssistChip(onClick={vm.updateDraft{it.copy(startTime=null)}},label={Text("All-day start")}) }
+@@ -126,8 +132,8 @@
+             item { Text("Deadline",style=MaterialTheme.typography.labelLarge) }
+             item {
+                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+-                    OutlinedTextField(d.dueDate?.toString() ?: "",{v->vm.updateDraft{it.copy(dueDate=runCatching{LocalDate.parse(v)}.getOrNull())}},label={Text("Deadline date")},modifier=Modifier.weight(1f),singleLine=true)
+-                    OutlinedTextField(d.dueTime?.toString() ?: "",{v->vm.updateDraft{it.copy(dueTime=runCatching{LocalTime.parse(v)}.getOrNull())}},label={Text("Deadline time")},modifier=Modifier.weight(1f),singleLine=true)
++                    DirectiveDatePickerField("Deadline date",d.dueDate,{value->vm.updateDraft{it.copy(dueDate=value)}},Modifier.weight(1f))
++                    DirectiveTimePickerField("Deadline time",d.dueTime,{value->vm.updateDraft{it.copy(dueTime=value)}},Modifier.weight(1f))
+                 }
+             }
+             item { AssistChip(onClick={vm.updateDraft{it.copy(dueTime=null)}},label={Text("All-day deadline")}) }
+@@ -187,9 +193,12 @@
+                     }
+                 }
+                 when(recurrence.endMode){
