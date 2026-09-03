@@ -1,0 +1,123 @@
++    allowClear: Boolean = true,
++) {
++    var open by remember { mutableStateOf(false) }
++    OutlinedButton(onClick = { open = true }, modifier = modifier.heightIn(min = 56.dp)) {
++        Column(Modifier.fillMaxWidth()) {
++            Text(label, style = MaterialTheme.typography.labelSmall)
++            Text(value?.let(::formatDirectiveDate) ?: "Select date", style = MaterialTheme.typography.bodyMedium)
++        }
++    }
++    if (open) {
++        val initialMillis = (value ?: LocalDate.now()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
++        val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
++        DatePickerDialog(
++            onDismissRequest = { open = false },
++            confirmButton = {
++                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                    if (allowClear) TextButton(onClick = { onValueChange(null); open = false }) { Text("Clear") }
++                    TextButton(onClick = {
++                        state.selectedDateMillis?.let { millis ->
++                            onValueChange(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate())
++                        }
++                        open = false
++                    }) { Text("Select") }
++                }
++            },
++            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
++        ) { DatePicker(state = state) }
++    }
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun DirectiveTimePickerField(
++    label: String,
++    value: LocalTime?,
++    onValueChange: (LocalTime?) -> Unit,
++    modifier: Modifier = Modifier,
++    allowClear: Boolean = true,
++) {
++    var open by remember { mutableStateOf(false) }
++    OutlinedButton(onClick = { open = true }, modifier = modifier.heightIn(min = 56.dp)) {
++        Column(Modifier.fillMaxWidth()) {
++            Text(label, style = MaterialTheme.typography.labelSmall)
++            Text(value?.let(::formatDirectiveTime) ?: "Select time", style = MaterialTheme.typography.bodyMedium)
++        }
++    }
++    if (open) {
++        val initial = value ?: LocalTime.now().withSecond(0).withNano(0)
++        val state = rememberTimePickerState(initialHour = initial.hour, initialMinute = initial.minute, is24Hour = true)
++        AlertDialog(
++            onDismissRequest = { open = false },
++            title = { Text(label) },
++            text = { TimePicker(state = state) },
++            confirmButton = {
++                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                    if (allowClear) TextButton(onClick = { onValueChange(null); open = false }) { Text("Clear") }
++                    Button(onClick = { onValueChange(LocalTime.of(state.hour, state.minute)); open = false }) { Text("Select") }
++                }
++            },
++            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
++        )
++    }
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun DirectiveMinuteOfDayPickerField(
++    label: String,
++    value: Int,
++    onValueChange: (Int) -> Unit,
++    modifier: Modifier = Modifier,
++    allowEndOfDay: Boolean = false,
++) {
++    var open by remember { mutableStateOf(false) }
++    OutlinedButton(onClick = { open = true }, modifier = modifier.heightIn(min = 56.dp)) {
++        Column(Modifier.fillMaxWidth()) {
++            Text(label, style = MaterialTheme.typography.labelSmall)
++            Text(formatDirectiveMinuteOfDay(value), style = MaterialTheme.typography.bodyMedium)
++        }
++    }
++    if (open) {
++        val safe = if (value == 1440) 23 * 60 + 59 else value.coerceIn(0, 1439)
++        val state = rememberTimePickerState(initialHour = safe / 60, initialMinute = safe % 60, is24Hour = true)
++        AlertDialog(
++            onDismissRequest = { open = false },
++            title = { Text(label) },
++            text = {
++                Column {
++                    TimePicker(state = state)
++                    if (allowEndOfDay) {
++                        TextButton(onClick = { onValueChange(1440); open = false }, modifier = Modifier.padding(top = 4.dp)) {
++                            Text("End of day • 000024")
++                        }
++                    }
++                }
++            },
++            confirmButton = { Button(onClick = { onValueChange(state.hour * 60 + state.minute); open = false }) { Text("Select") } },
++            dismissButton = { TextButton(onClick = { open = false }) { Text("Cancel") } },
++        )
++    }
++}
+diff -ruN '--exclude=.gradle' '--exclude=build' '--exclude=.git' baseline_source/app/src/test/kotlin/com/example/directive/ui/components/DirectiveDateTimeFormatTest.kt source/app/src/test/kotlin/com/example/directive/ui/components/DirectiveDateTimeFormatTest.kt
+--- baseline_source/app/src/test/kotlin/com/example/directive/ui/components/DirectiveDateTimeFormatTest.kt	1970-01-01 00:00:00.000000000 +0000
++++ source/app/src/test/kotlin/com/example/directive/ui/components/DirectiveDateTimeFormatTest.kt	2026-09-03 18:08:13.991070834 +0000
+@@ -0,0 +1,18 @@
++package com.example.directive.ui.components
++
++import org.junit.Assert.assertEquals
++import org.junit.Test
++import java.time.LocalDate
++import java.time.LocalTime
++
++class DirectiveDateTimeFormatTest {
++    @Test fun `date uses ddmmyyyy`() {
++        assertEquals("03092026", formatDirectiveDate(LocalDate.of(2026, 9, 3)))
++    }
++
++    @Test fun `time uses ssmmhh`() {
++        assertEquals("451718", formatDirectiveTime(LocalTime.of(18, 17, 45)))
++        assertEquals("001718", formatDirectiveMinuteOfDay(18 * 60 + 17))
++        assertEquals("000024", formatDirectiveMinuteOfDay(1440))
++    }
++}
