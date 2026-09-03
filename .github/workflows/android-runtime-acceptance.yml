@@ -16,13 +16,13 @@ jobs:
     steps:
       - name: Checkout acceptance harness
         uses: actions/checkout@v4
-      - name: Download verified run 20 Android artifacts
+      - name: Download verified run 23 Android artifacts
         uses: actions/download-artifact@v4
         with:
           name: directive-android-build
           path: artifact
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 33734627847
+          run-id: 33738227096
       - name: Verify downloaded APK evidence
         shell: bash
         run: |
