@@ -1,0 +1,145 @@
+name: DIRECTIVE Reboot Receiver Diagnostic V5
+
+on:
+  push:
+    paths:
+      - '.github/workflows/android-reboot-receiver-diagnostic-v5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: directive-reboot-receiver-diagnostic-v5
+  cancel-in-progress: true
+
+jobs:
+  diagnostic:
+    name: Compare real boot with targeted boot broadcast
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout controls
+        uses: actions/checkout@v4
+
+      - name: Download V3 proven Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-final-exec002-convergence-v3
+          path: prior
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33744984956
+
+      - name: Verify V3 inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f prior/DIRECTIVE-1.0.0-debug.apk
+          test -f prior/DIRECTIVE-1.0.0-androidTest.apk
+          test -f prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz
+          echo '76afe150e3a6f0b1f68ee57fb08cadf51f98bf258b9b909c9b863805ad7e9c1d  prior/DIRECTIVE_EXEC002_FINAL_SOURCE.tar.gz' | sha256sum -c -
+          mkdir -p artifact
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+
+      - name: Install and boot API 37 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-37.0;google_apis;x86_64'
+          sdkmanager 'platform-tools' 'emulator' "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-reboot-v5-api37 --package "$IMAGE"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm || true; fi
+          nohup "$ANDROID_HOME/emulator/emulator" -avd directive-reboot-v5-api37 -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect > artifact/EMULATOR_LOG.txt 2>&1 &
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
+          test "$boot" = 1
+
+      - name: Install app and seed reminder
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb install prior/DIRECTIVE-1.0.0-debug.apk | tee artifact/CLEAN_INSTALL.txt
+          adb install prior/DIRECTIVE-1.0.0-androidTest.apk | tee artifact/ANDROIDTEST_INSTALL.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.directive.debug | tail -n1 | tr -d '\r')"
+          test -n "$COMPONENT"; printf '%s\n' "$COMPONENT" > artifact/LAUNCH_COMPONENT.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/INITIAL_LAUNCH.txt
+          RUNNER="$(adb shell pm list instrumentation | tr -d '\r' | awk '/\(target=com.example.directive.debug\)/ {v=$1; sub(/^instrumentation:/,"",v); print v; exit}')"
+          test -n "$RUNNER"; printf '%s\n' "$RUNNER" > artifact/INSTRUMENTATION_COMPONENT.txt
+          TEST='com.example.directive.DirectiveRebootReminderInstrumentedTest#seedFutureReminderForReboot'
+          adb shell am instrument -w -e class "$TEST" "$RUNNER" | tee artifact/REBOOT_SEED.txt
+          grep -Eq 'OK \(1 test\)' artifact/REBOOT_SEED.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/PRE_REBOOT_EXPLICIT_LAUNCH.txt
+          adb shell am get-standby-bucket com.example.directive.debug | tee artifact/STANDBY_BUCKET_PRE_REBOOT.txt || true
+          adb shell dumpsys package com.example.directive.debug > artifact/PACKAGE_PRE_REBOOT.txt
+          grep -n -E 'stopped=|notLaunched=|ReminderRestoreReceiver|BOOT_COMPLETED' artifact/PACKAGE_PRE_REBOOT.txt > artifact/PACKAGE_PRE_REBOOT_FILTERED.txt || true
+
+      - name: Perform real reboot and snapshot reminder before any app interaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb logcat -c || true
+          adb reboot
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 180); do boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"; [ "$boot" = 1 ] && break; sleep 2; done
+          test "$boot" = 1
+          sleep 15
+          adb shell am get-standby-bucket com.example.directive.debug | tee artifact/STANDBY_BUCKET_POST_REBOOT.txt || true
+          adb shell dumpsys user | grep -E 'RUNNING_|State:' > artifact/USER_STATE_POST_REBOOT.txt || true
+          adb shell dumpsys package com.example.directive.debug > artifact/PACKAGE_POST_REBOOT.txt
+          grep -n -E 'stopped=|notLaunched=|ReminderRestoreReceiver|BOOT_COMPLETED' artifact/PACKAGE_POST_REBOOT.txt > artifact/PACKAGE_POST_REBOOT_FILTERED.txt || true
+          mkdir -p artifact/db-before-manual
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db > artifact/db-before-manual/directive.db
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-wal > artifact/db-before-manual/directive.db-wal 2>/dev/null || true
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-shm > artifact/db-before-manual/directive.db-shm 2>/dev/null || true
+          python3 - <<'PY' | tee artifact/REMINDER_BEFORE_MANUAL.txt
+          import sqlite3
+          p='artifact/db-before-manual/directive.db'
+          con=sqlite3.connect(f'file:{p}?mode=ro', uri=True)
+          row=con.execute("select id,state,scheduledAt,absoluteAt,updatedAt from reminders where id='runtime-reboot-reminder'").fetchone()
+          print(row)
+          con.close()
+          PY
+          adb logcat -d -v time > artifact/REAL_BOOT_LOGCAT.txt
+          grep -E 'com.example.directive|ReminderRestoreReceiver|BOOT_COMPLETED|WorkManager|AndroidRuntime|Hilt' artifact/REAL_BOOT_LOGCAT.txt > artifact/REAL_BOOT_LOGCAT_FILTERED.txt || true
+
+      - name: Send documented targeted BOOT_COMPLETED test broadcast
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb logcat -c || true
+          adb shell am broadcast -a android.intent.action.BOOT_COMPLETED com.example.directive.debug | tee artifact/TARGETED_BOOT_BROADCAST.txt
+          sleep 8
+          adb logcat -d -v time > artifact/TARGETED_BOOT_LOGCAT.txt
+          grep -E 'com.example.directive|ReminderRestoreReceiver|BOOT_COMPLETED|WorkManager|AndroidRuntime|Hilt' artifact/TARGETED_BOOT_LOGCAT.txt > artifact/TARGETED_BOOT_LOGCAT_FILTERED.txt || true
+          mkdir -p artifact/db-after-manual
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db > artifact/db-after-manual/directive.db
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-wal > artifact/db-after-manual/directive.db-wal 2>/dev/null || true
+          adb exec-out run-as com.example.directive.debug cat databases/directive.db-shm > artifact/db-after-manual/directive.db-shm 2>/dev/null || true
+          python3 - <<'PY' | tee artifact/REMINDER_AFTER_MANUAL.txt
+          import sqlite3
+          p='artifact/db-after-manual/directive.db'
+          con=sqlite3.connect(f'file:{p}?mode=ro', uri=True)
+          row=con.execute("select id,state,scheduledAt,absoluteAt,updatedAt from reminders where id='runtime-reboot-reminder'").fetchone()
+          print(row)
+          if not row or row[1] != 'SCHEDULED' or row[2] is None:
+              raise SystemExit('TARGETED_BOOT_RECOVERY_DID_NOT_SCHEDULE')
+          con.close()
+          PY
+          echo 'TARGETED_BOOT_RECOVERY=PASS' | tee artifact/DIAGNOSTIC_RESULT.txt
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-reboot-receiver-diagnostic-v5
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
