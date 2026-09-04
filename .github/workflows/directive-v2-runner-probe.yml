@@ -1,0 +1,16 @@
+name: Directive V2 Runner Probe
+on:
+  push:
+    branches: [directive-v2-ci-probe-04092026]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm runner
+        run: |
+          set -euo pipefail
+          uname -a
+          java -version || true
+          echo 'DIRECTIVE_V2_PUBLIC_RUNNER_AVAILABLE=1'
