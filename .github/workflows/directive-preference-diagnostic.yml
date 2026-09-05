@@ -65,6 +65,16 @@ jobs:
           capture 'ARouter$$Providers$$TickTick.smali'
           capture 'ARouter$$Group$$kernel.smali'
           capture 'ARouter$$Root$$*.smali'
+          capture 'TickTickPreferenceFragment.smali'
+          capture 'DataTracker.smali'
+          capture 'DataTracker$Companion*.smali'
+          capture 'UserCountryDecider*.smali'
+          capture 'Utils.smali'
+          capture 'DailyScheduleReceiver.smali'
+          echo '=== Preference XML / network-era key references ===' >> "$OUT"
+          grep -R -n -i -E 'ip.?change|network|country|activation|preference' "$ROOT/res/xml" "$ROOT/res/values" --include='*.xml' | head -n 4000 >> "$OUT" || true
+          echo '=== Relevant method/call references ===' >> "$OUT"
+          grep -R -n -E 'initIpChangePreference|sendActivationEvent|UserCountryDecider|isInNetwork|getNetworkInfo|DailyScheduleReceiver' "$ROOT"/smali* --include='*.smali' | head -n 5000 >> "$OUT" || true
           echo '=== LogisticsCenter / ARouter implementation candidates ===' >> "$OUT"
           for rel in 'smali/j3/b.smali' 'smali/l3/a.smali' 'smali/k3/a.smali'; do
             f="$ROOT/$rel"
