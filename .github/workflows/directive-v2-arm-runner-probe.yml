@@ -1,0 +1,18 @@
+name: Directive V2 ARM Runner Probe
+on:
+  push:
+    branches: [directive-v2-ci-probe-04092026]
+    paths: ['.github/workflows/directive-v2-arm-runner-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Confirm native ARM runner
+        run: |
+          set -euo pipefail
+          uname -a
+          uname -m
+          test "$(uname -m)" = "aarch64"
+          echo DIRECTIVE_V2_NATIVE_ARM_RUNNER=1
