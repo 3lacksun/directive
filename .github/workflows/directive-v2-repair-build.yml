@@ -1,0 +1,263 @@
+name: Directive V2 Repaired APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-v2-ci-probe-04092026]
+    paths:
+      - '.github/workflows/directive-v2-repair-build.yml'
+      - 'ci/directive-v2-repair-trigger/**'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET: DIRECTIVE_V2_UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+  APKTOOL_VERSION: 2.12.1
+  APKTOOL_SHA256: 66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
+  BUILD_TOOLS_VERSION: 35.0.0
+  APPLICATION_ID: com.nexarenew.directivev2
+  BUILD_RELEASE_TAG: directive-v2-ci-build-latest
+
+jobs:
+  build:
+    name: Rebuild repaired APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout runner repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Require private-source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download authoritative private source and private repair support
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input private-support extracted out
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET" --dir input
+          test -s "input/$SOURCE_ASSET"
+          python3 - <<'PY'
+          import hashlib, os, pathlib
+          p=pathlib.Path('input')/os.environ['SOURCE_ASSET']
+          got=hashlib.sha256(p.read_bytes()).hexdigest()
+          exp=os.environ['SOURCE_SHA256']
+          print('source_sha256='+got)
+          if got != exp: raise SystemExit(f'SOURCE SHA mismatch: {got} != {exp}')
+          PY
+          for path in \
+            support/prepare_isolated_package.py \
+            support/directive-v2-local-test-keystore.b64 \
+            support/runtime_acceptance.sh \
+            .github/workflows/build-directive-v2.yml; do
+            name="$(basename "$path")"
+            gh api "repos/$SOURCE_REPO/contents/$path?ref=main" --jq .content \
+              | tr -d '\n' | base64 --decode > "private-support/$name"
+          done
+          chmod +x private-support/runtime_acceptance.sh
+          unzip -q "input/$SOURCE_ASSET" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n 1)"
+          test -n "$SRC_ROOT"
+          test -f "$SRC_ROOT/AndroidManifest.xml"
+          echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
+
+      - name: Apply isolated Directive V2 Android identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 private-support/prepare_isolated_package.py "$SRC_ROOT" | tee out/package-migration.txt
+          cp "$SRC_ROOT/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json" out/
+          python3 - <<'PY'
+          import json
+          r=json.load(open('out/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json'))
+          assert r['verification']['status']=='PASS', r['verification']
+          assert r['new_application_id']=='com.nexarenew.directivev2'
+          print('PASS package migration verification')
+          PY
+
+      - name: Download verified Apktool and compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
+            -o apktool.jar
+          python3 - <<'PY'
+          import hashlib, os
+          got=hashlib.sha256(open('apktool.jar','rb').read()).hexdigest()
+          if got != os.environ['APKTOOL_SHA256']: raise SystemExit('Apktool SHA mismatch')
+          print('PASS Apktool SHA')
+          PY
+          java -Xmx6g -jar apktool.jar b "$SRC_ROOT" -o out/directive-v2-unsigned.apk
+          test -s out/directive-v2-unsigned.apk
+          unzip -t out/directive-v2-unsigned.apk > out/unsigned-zip-test.txt
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build tools, restore stable private signer, align and sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "build-tools;$BUILD_TOOLS_VERSION" platform-tools
+          SIGNING_ALIAS="$(awk '/^[[:space:]]*SIGNING_ALIAS:/ {print $2; exit}' private-support/build-directive-v2.yml)"
+          SIGNING_STOREPASS="$(awk '/^[[:space:]]*SIGNING_STOREPASS:/ {print $2; exit}' private-support/build-directive-v2.yml)"
+          SIGNING_CERT_SHA256="$(awk '/^[[:space:]]*SIGNING_CERT_SHA256:/ {print $2; exit}' private-support/build-directive-v2.yml)"
+          test -n "$SIGNING_ALIAS"; test -n "$SIGNING_STOREPASS"; test -n "$SIGNING_CERT_SHA256"
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          base64 --decode private-support/directive-v2-local-test-keystore.b64 > out/directive-v2-local-test.keystore
+          ACTUAL_CERT="$({ keytool -exportcert -keystore out/directive-v2-local-test.keystore -storepass "$SIGNING_STOREPASS" -alias "$SIGNING_ALIAS" -rfc; } \
+            | openssl x509 -noout -fingerprint -sha256 | sed 's/.*=//;s/://g')"
+          echo "Signing certificate SHA-256: $ACTUAL_CERT" | tee out/signing-cert.txt
+          test "$ACTUAL_CERT" = "$SIGNING_CERT_SHA256"
+          "$BT/zipalign" -f -P 16 -v 4 out/directive-v2-unsigned.apk out/directive-v2-aligned.apk > out/zipalign.txt
+          "$BT/zipalign" -c -P 16 -v 4 out/directive-v2-aligned.apk >> out/zipalign.txt
+          "$BT/apksigner" sign --ks out/directive-v2-local-test.keystore --ks-key-alias "$SIGNING_ALIAS" \
+            --ks-pass "pass:$SIGNING_STOREPASS" --key-pass "pass:$SIGNING_STOREPASS" \
+            --out out/Directive-V2-debug.apk out/directive-v2-aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs out/Directive-V2-debug.apk | tee out/apksigner-verify.txt
+          "$BT/zipalign" -c -P 16 -v 4 out/Directive-V2-debug.apk >> out/zipalign.txt
+
+      - name: Verify packaged identity permissions and ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/aapt" dump badging out/Directive-V2-debug.apk | tee out/aapt-badging.txt
+          "$BT/aapt" dump permissions out/Directive-V2-debug.apk | tee out/aapt-permissions.txt
+          grep -q "package: name='$APPLICATION_ID'" out/aapt-badging.txt
+          grep -q "application-label:'Directive V2'" out/aapt-badging.txt
+          if grep -Eqi 'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/aapt-permissions.txt; then
+            echo 'FAIL forbidden network permission in compiled APK' >&2
+            exit 1
+          fi
+          ABIS="$(unzip -Z1 out/Directive-V2-debug.apk | sed -n 's#^lib/\([^/]*\)/.*\.so$#\1#p' | sort -u | tr '\n' ' ')"
+          echo "Native ABIs: ${ABIS:-none}" | tee out/native-abis.txt
+          if [ -n "$ABIS" ] && ! grep -qw arm64-v8a <<<"$ABIS"; then exit 1; fi
+          sha256sum out/Directive-V2-debug.apk | tee out/Directive-V2-debug.apk.sha256
+
+      - name: Upload repaired APK for runtime jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-v2-repaired-apk
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            out/Directive-V2-debug.apk
+            out/Directive-V2-debug.apk.sha256
+            out/aapt-badging.txt
+            out/aapt-permissions.txt
+            out/apksigner-verify.txt
+            out/signing-cert.txt
+            out/native-abis.txt
+            out/zipalign.txt
+            out/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json
+            private-support/runtime_acceptance.sh
+
+  runtime:
+    name: ARM64 Android ${{ matrix.api }} runtime acceptance
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [30, 36]
+    steps:
+      - name: Download repaired APK
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-v2-repaired-apk
+          path: repaired
+
+      - name: Prepare runtime acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x repaired/runtime_acceptance.sh
+          mkdir -p out
+          cp repaired/Directive-V2-debug.apk out/Directive-V2-debug.apk
+
+      - name: Clean install and offline cold launch
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        env:
+          APPLICATION_ID: ${{ env.APPLICATION_ID }}
+          APK_PATH: out/Directive-V2-debug.apk
+        with:
+          api-level: ${{ matrix.api }}
+          arch: arm64-v8a
+          target: default
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: bash repaired/runtime_acceptance.sh
+
+      - name: Pack runtime evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-evidence
+          if [ -d out/runtime ]; then cp -R out/runtime/. runtime-evidence/; fi
+          printf 'api=%s\n' '${{ matrix.api }}' > runtime-evidence/test-api.txt
+          tar -czf "directive-v2-runtime-api-${{ matrix.api }}.tar.gz" runtime-evidence
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-v2-runtime-api-${{ matrix.api }}
+          retention-days: 7
+          if-no-files-found: error
+          path: directive-v2-runtime-api-${{ matrix.api }}.tar.gz
+
+  publish:
+    name: Publish runtime-accepted APK privately
+    needs: runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download repaired APK
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-v2-repaired-apk
+          path: release
+
+      - name: Download runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: directive-v2-runtime-api-*
+          path: evidence
+          merge-multiple: true
+
+      - name: Publish repaired APK and evidence to private release
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release/Directive-V2-debug.apk
+          find evidence -type f -name '*.tar.gz' -size +0c -print
+          gh release view "$BUILD_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1 \
+            || gh release create "$BUILD_RELEASE_TAG" --repo "$SOURCE_REPO" --target main \
+                 --title 'Directive V2 CI Build' --notes 'Runtime-accepted isolated Directive V2 APK.'
+          gh release upload "$BUILD_RELEASE_TAG" --repo "$SOURCE_REPO" --clobber \
+            release/Directive-V2-debug.apk release/Directive-V2-debug.apk.sha256 \
+            release/aapt-badging.txt release/aapt-permissions.txt release/apksigner-verify.txt \
+            release/signing-cert.txt release/native-abis.txt release/zipalign.txt evidence/*.tar.gz
+          echo 'PASS runtime-accepted repaired APK published privately'
