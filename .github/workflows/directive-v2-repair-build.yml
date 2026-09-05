@@ -151,23 +151,31 @@ jobs:
           if [ -n "$ABIS" ] && ! grep -qw arm64-v8a <<<"$ABIS"; then exit 1; fi
           sha256sum out/Directive-V2-debug.apk | tee out/Directive-V2-debug.apk.sha256
 
+      - name: Stage flat runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-artifact
+          cp out/Directive-V2-debug.apk runtime-artifact/
+          cp out/Directive-V2-debug.apk.sha256 runtime-artifact/
+          cp out/aapt-badging.txt runtime-artifact/
+          cp out/aapt-permissions.txt runtime-artifact/
+          cp out/apksigner-verify.txt runtime-artifact/
+          cp out/signing-cert.txt runtime-artifact/
+          cp out/native-abis.txt runtime-artifact/
+          cp out/zipalign.txt runtime-artifact/
+          cp out/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json runtime-artifact/
+          cp private-support/runtime_acceptance.sh runtime-artifact/
+          test -s runtime-artifact/Directive-V2-debug.apk
+          test -s runtime-artifact/runtime_acceptance.sh
+
       - name: Upload repaired APK for runtime jobs
         uses: actions/upload-artifact@v4
         with:
           name: directive-v2-repaired-apk
           retention-days: 7
           if-no-files-found: error
-          path: |
-            out/Directive-V2-debug.apk
-            out/Directive-V2-debug.apk.sha256
-            out/aapt-badging.txt
-            out/aapt-permissions.txt
-            out/apksigner-verify.txt
-            out/signing-cert.txt
-            out/native-abis.txt
-            out/zipalign.txt
-            out/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json
-            private-support/runtime_acceptance.sh
+          path: runtime-artifact/
 
   runtime:
     name: ARM64 Android ${{ matrix.api }} runtime acceptance
@@ -189,6 +197,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          find repaired -maxdepth 2 -type f -print
+          test -s repaired/runtime_acceptance.sh
+          test -s repaired/Directive-V2-debug.apk
           chmod +x repaired/runtime_acceptance.sh
           mkdir -p out
           cp repaired/Directive-V2-debug.apk out/Directive-V2-debug.apk
