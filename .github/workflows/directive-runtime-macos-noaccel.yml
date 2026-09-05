@@ -22,7 +22,7 @@ env:
 jobs:
   android16_arm64_noaccel:
     name: Android 16 ARM64 no-acceleration clean launch
-    runs-on: macos-15-arm64
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Require private DIRECTIVE source token
