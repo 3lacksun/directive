@@ -1,0 +1,3 @@
+Rebuild DIRECTIVE from the authoritative source using the latest private remediation support.
+Reason: Android 16 runtime evidence identified RetentionConfigManager.tryLoadUserGuide as the next offline-incompatible Main-dispatcher startup path.
+Acceptance remains Android 16 API 36, translated arm64-v8a, offline cold launch and relaunch.
