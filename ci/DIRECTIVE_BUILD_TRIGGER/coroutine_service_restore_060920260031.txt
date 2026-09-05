@@ -1,0 +1,9 @@
+DIRECTIVE Android 16 remediation rebuild.
+
+Private package preparation commit: 332ce14a21f170e3285a9ef81f2a0c1befde4f1d
+
+Changes under test:
+- preserve kotlinx.coroutines MainDispatcherFactory ServiceLoader metadata through apktool rebuild;
+- preserve CoroutineExceptionHandler service metadata;
+- suppress obsolete remote first-launch A/B guide path;
+- retain existing offline startup remediations, DIRECTIVE branding, minSdk 21, targetSdk 37 and no-network-permission boundary.
