@@ -1,0 +1,259 @@
+name: Package DIRECTIVE handover
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-handover-pack.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PRIVATE_REPO: 3lacksun/-directive-v2-offline
+  HANDOVER_NAME: DIRECTIVE_HANDOVER_06092026004619
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout current DIRECTIVE runner branch
+        uses: actions/checkout@v5
+
+      - name: Build authoritative handover pack
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+          PUBLIC_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p handover/support handover/workflows handover/evidence
+
+          # Pull the exact current private remediation support files.
+          for path in \
+            support/prepare_directive_package.py \
+            support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh \
+            README.md; do
+            base="$(basename "$path")"
+            gh api "repos/$PRIVATE_REPO/contents/$path?ref=main" --jq .content \
+              | tr -d '\n' | base64 --decode > "handover/support/$base"
+          done
+
+          # Copy the current active public runner/build workflows only.
+          cp .github/workflows/build-directive.yml handover/workflows/
+          cp .github/workflows/directive-runtime-resume.yml handover/workflows/
+          cp .github/workflows/directive-runtime-diagnostic.yml handover/workflows/ || true
+          cp .github/workflows/directive-preference-diagnostic.yml handover/workflows/ || true
+          cp .github/workflows/directive-coroutines-diagnostic.yml handover/workflows/ || true
+
+          # Pull the three decisive evidence packs from the current remediation line.
+          GH_TOKEN="$PUBLIC_TOKEN" gh run download 33998672783 -R 3lacksun/directive \
+            -n DIRECTIVE-preference-provider-diagnostic \
+            -D handover/evidence/preference-provider || true
+          GH_TOKEN="$PUBLIC_TOKEN" gh run download 33998749712 -R 3lacksun/directive \
+            -n DIRECTIVE-coroutine-dispatcher-diagnostic \
+            -D handover/evidence/coroutine-dispatcher || true
+          GH_TOKEN="$PUBLIC_TOKEN" gh run download 33999048683 -R 3lacksun/directive \
+            -n DIRECTIVE-runtime-resume-failure-evidence \
+            -D handover/evidence/runtime-latest || true
+
+          cat > handover/DIRECTIVE_HANDOVER.md <<'EOF'
+          # DIRECTIVE — AUTHORITATIVE HANDOVER
+
+          **Handover timestamp:** 06-09-2026 00:46:19 Europe/London  
+          **Product name:** DIRECTIVE  
+          **Tagline:** Plan. Execute. Advance.  
+          **Current status:** REMEDIATION IN PROGRESS / NO-GO for final APK release
+
+          ## 1. Authority and naming
+
+          The user-facing product is **DIRECTIVE**. Do not call the product TickTick or Directive V2. The Android package identifier `com.ticktick.task` is retained solely as the legacy/internal runtime package ID for update/runtime compatibility.
+
+          Current governing requirements:
+          - offline-only operation;
+          - `android.permission.INTERNET` must remain absent;
+          - do not restore cloud sync, analytics, push/Firebase, online billing, social/OAuth, web integrations, or network background schedulers;
+          - preserve working local tasks, planner/calendar, habits/focus, reminders, notifications, widgets, timers, and local storage;
+          - user-facing branding, filenames, launcher/adaptive/round/monochrome icon and splash assets must be DIRECTIVE;
+          - no device-settings workarounds may be required from the user;
+          - no PASS may be claimed without executed verification.
+
+          ## 2. Source authority
+
+          Private remediation repository: `3lacksun/-directive-v2-offline`  
+          Public GitHub Actions bridge repository: `3lacksun/directive`  
+          Active bridge branch: `directive-ci-build-05092026`
+
+          Authoritative historical source release asset:
+          `DIRECTIVE_V2_UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip`
+
+          Source SHA-256:
+          `40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb`
+
+          The historical source filename is provenance only. The active product and generated output naming must be DIRECTIVE.
+
+          ## 3. Current remediated build line
+
+          Private package-preparation commit:
+          `332ce14a21f170e3285a9ef81f2a0c1befde4f1d`
+
+          That remediation currently:
+          - enforces minSdk 21 and targetSdk 37;
+          - forces application/launcher branding to DIRECTIVE;
+          - generates DIRECTIVE launcher/adaptive/round/monochrome/splash resources;
+          - keeps forbidden network permissions absent;
+          - neutralises obsolete preset remote fetch;
+          - neutralises the remote retention/user-guide loader;
+          - neutralises the remote first-launch experiment path;
+          - preserves coroutine Android `MainDispatcherFactory` and `CoroutineExceptionHandler` ServiceLoader metadata through Apktool rebuilds.
+
+          Latest fully compiled/signed candidate under test:
+          `DIRECTIVE_CANDIDATE_33998941109.apk`
+
+          Candidate SHA-256:
+          `252974f90d42e3e7b17b8b8638a40b61dd804641cbed48fb6cc523de52033498`
+
+          The candidate is **not a final release** and must not be distributed as runtime accepted.
+
+          ## 4. Verified milestones
+
+          The x64 build/sign/static-verification stage passes on the current line:
+          - authoritative source hash verified;
+          - package preparation PASS;
+          - Apktool rebuild PASS;
+          - signing identity restored/verified;
+          - zipalign PASS;
+          - application label DIRECTIVE PASS;
+          - minSdk 21 / targetSdk 37 PASS;
+          - forbidden network-permission gate PASS;
+          - arm64-v8a native ABI presence PASS.
+
+          The coroutine packaging defect has been closed. Binary verification on the latest candidate proved both files are present in the rebuilt APK:
+          - `META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory` -> `kotlinx.coroutines.android.AndroidDispatcherFactory`
+          - `META-INF/services/kotlinx.coroutines.CoroutineExceptionHandler` -> `kotlinx.coroutines.android.AndroidExceptionPreHandler`
+
+          ## 5. Current runtime blocker
+
+          Latest Android 16/API 36 acceptance run:
+          - workflow run: `33999048683`
+          - runtime job: `101394524478`
+          - candidate installs successfully under x86_64 emulator using Android native bridge for arm64-v8a;
+          - offline launch reaches the main activity path;
+          - prior missing-Main-dispatcher crash is no longer the blocker.
+
+          Current fatal crash:
+
+          `java.lang.NullPointerException: Attempt to invoke virtual method 'void androidx.preference.Preference.onPrepareForRemoval()' on a null object reference`
+
+          Decisive call chain:
+          - `androidx.preference.PreferenceGroup.j(PreferenceGroup.java:2)`
+          - `androidx.preference.PreferenceGroup.f(PreferenceGroup.java:1)`
+          - `com.ticktick.task.activity.preference.TickTickPreferenceFragment.initIpChangePreference(TickTickPreferenceFragment.java:15)`
+          - `TickTickPreferenceFragment.initPreference(TickTickPreferenceFragment.java:110)`
+          - `TickTickPreferenceFragment.onCreatePreferences(...)`
+          - `MeTaskActivity.onCreate(...)`
+
+          Root-cause direction: `initIpChangePreference()` is attempting to remove/prepare a preference that is absent/null in the offline-remediated preference hierarchy. Remediate the obsolete IP/network-change preference path surgically; do not remove unrelated local preferences.
+
+          ## 6. Secondary offline defects visible in runtime evidence
+
+          The runtime also logs residual network-dependent code attempting calls despite the manifest correctly denying network permissions. These are not the fatal crash above, but they remain cleanup targets for a clean offline build:
+          - `DataTracker$Companion$sendActivationEvent$1` attempts HTTP/DNS and fails with missing INTERNET permission;
+          - `UserCountryDecider` attempts HTTP/DNS and fails with missing INTERNET permission;
+          - `Utils.getNetworkInfo()` / `Utils.isInNetwork()` query connectivity and fail because ACCESS_NETWORK_STATE is absent;
+          - `DailyScheduleReceiver` reaches `Utils.isInNetwork()`.
+
+          These paths must be neutralised or made deterministic-offline without adding network permissions. Do not restore INTERNET or ACCESS_NETWORK_STATE simply to silence these errors.
+
+          ## 7. Required next execution sequence
+
+          Continue autonomously in this order:
+          1. inspect exact smali/resource implementation of `TickTickPreferenceFragment.initIpChangePreference()` and the relevant preference XML/key;
+          2. patch only the obsolete IP/network-change preference removal logic so null preference objects are never passed into `PreferenceGroup` removal;
+          3. add deterministic static verification for that patch;
+          4. neutralise the residual activation-event, country-decider and connectivity-probe paths that are outside the offline product contract;
+          5. rebuild/sign/static-gate using the existing authoritative pipeline;
+          6. rerun Android 16 clean-install offline cold-launch acceptance;
+          7. if a new app-owned crash appears, isolate/remediate/retest; do not stop at diagnosis;
+          8. only after cold-launch and force-stop/relaunch PASS, create `DIRECTIVE_DDMMYYYYHHMMSS.apk` and final evidence;
+          9. preserve signing identity and retained internal runtime package ID unless a later explicit user instruction authorises a migration;
+          10. perform physical-device UAT only as the final external gate; do not claim it from emulator evidence.
+
+          ## 8. Evidence included in this ZIP
+
+          - current private `prepare_directive_package.py` snapshot;
+          - current private `DIRECTIVE_RUNTIME_ACCEPTANCE.sh` snapshot;
+          - current public build/runtime workflows;
+          - preference-provider diagnostic evidence;
+          - coroutine-dispatcher diagnostic evidence;
+          - latest Android 16 runtime failure evidence;
+          - continuation prompt;
+          - SHA-256 manifest of the handover contents.
+
+          ## 9. Release decision
+
+          **NO-GO** at handover time. Static build is healthy, coroutine metadata remediation is verified, but Android 16 runtime acceptance still fails at the preference-fragment null-removal defect. No timestamped final APK should be represented as accepted until this runtime gate passes.
+          EOF
+
+          cat > handover/DIRECTIVE_CONTINUATION_PROMPT.md <<'EOF'
+          # DIRECTIVE — CONTINUATION PROMPT
+
+          Continue DIRECTIVE from the exact authoritative handover contained in this ZIP.
+
+          This is an implementation, remediation, verification, convergence and final-handover run. Do not restart the project, do not revert to an earlier build, and do not redesign the application.
+
+          The product is called **DIRECTIVE**. Never use the retained package identifier `com.ticktick.task` as the product name; it is an internal compatibility/runtime identifier only.
+
+          Read `DIRECTIVE_HANDOVER.md` first and treat it as the current state summary. Use the included current support scripts, workflows and evidence. Preserve source SHA-256 `40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb`, current signing continuity, minSdk 21, targetSdk 37 and the no-network-permissions boundary unless later explicit user authority supersedes them.
+
+          PRIMARY COMMAND:
+
+          Continue autonomously from the current Android 16 failure. Fix `TickTickPreferenceFragment.initIpChangePreference()` so the obsolete IP/network-change preference path cannot pass a null preference into AndroidX `PreferenceGroup` removal. Preserve all unrelated local preferences and local functionality.
+
+          Then remove/neutralise remaining runtime network-dependent startup/background paths that are outside the offline-only product contract, including activation tracking, online country detection and connectivity-state probes. Do not add INTERNET, ACCESS_NETWORK_STATE or other network permissions to make legacy code work.
+
+          Proceed through:
+
+          exact root-cause inspection -> surgical patch -> static verification -> rebuild/sign -> compiled binary gates -> Android 16 clean-install offline cold launch -> crash remediation loop -> force-stop/relaunch acceptance -> final timestamped DIRECTIVE APK -> evidence -> updated handover.
+
+          Do not stop for routine approval. Do not report PASS for any stage that was not actually executed. Do not publish or present the current candidate as final while runtime acceptance is failing.
+          EOF
+
+          cat > handover/DIRECTIVE_STATE.json <<'EOF'
+          {
+            "product": "DIRECTIVE",
+            "handover_timestamp_europe_london": "2026-09-06T00:46:19+01:00",
+            "release_decision": "NO-GO",
+            "source_sha256": "40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb",
+            "retained_internal_runtime_package_id": "com.ticktick.task",
+            "min_sdk": 21,
+            "target_sdk": 37,
+            "private_package_preparation_commit": "332ce14a21f170e3285a9ef81f2a0c1befde4f1d",
+            "current_candidate": "DIRECTIVE_CANDIDATE_33998941109.apk",
+            "current_candidate_sha256": "252974f90d42e3e7b17b8b8638a40b61dd804641cbed48fb6cc523de52033498",
+            "latest_android16_run": 33999048683,
+            "latest_android16_job": 101394524478,
+            "current_fatal_blocker": "TickTickPreferenceFragment.initIpChangePreference null Preference removal"
+          }
+          EOF
+
+          (
+            cd handover
+            find . -type f ! -name DIRECTIVE_HANDOVER_SHA256SUMS.txt -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > DIRECTIVE_HANDOVER_SHA256SUMS.txt
+          )
+
+          echo 'Handover contents:'
+          find handover -type f -maxdepth 4 | sort
+
+      - name: Upload DIRECTIVE handover artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.HANDOVER_NAME }}
+          retention-days: 30
+          compression-level: 9
+          path: handover/
