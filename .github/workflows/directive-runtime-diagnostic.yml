@@ -1,0 +1,83 @@
+name: DIRECTIVE Runtime Crash Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-runtime-diagnostic.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download and extract authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted diag
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE_DOWNLOADED="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE_DOWNLOADED"
+          echo "$SOURCE_SHA256  $SOURCE_DOWNLOADED" | sha256sum -c -
+          unzip -q "$SOURCE_DOWNLOADED" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Capture targeted smali and ARouter evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=diag/DIRECTIVE_RUNTIME_CRASH_DIAGNOSTIC.txt
+          : > "$OUT"
+          {
+            echo '=== FirstLaunchGuideTestHelper methods ==='
+            find "$ROOT" -type f -name 'FirstLaunchGuideTestHelper.smali' -print
+            find "$ROOT" -type f -name 'FirstLaunchGuideTestHelper.smali' -exec grep -n -E '^\.method|tryShowFirstLaunchGuide|MainDispatchers|Channels' {} \;
+            echo
+            echo '=== FirstLaunchGuideTestHelper full smali ==='
+            find "$ROOT" -type f -name 'FirstLaunchGuideTestHelper.smali' -exec cat {} \;
+            echo
+            echo '=== KernelManager ==='
+            find "$ROOT" -type f -name 'KernelManager.smali' -print -exec cat {} \;
+            echo
+            echo '=== PreferenceAccessor ==='
+            find "$ROOT" -type f -name 'PreferenceAccessor.smali' -print -exec cat {} \;
+            echo
+            echo '=== AppConfigAccessor ==='
+            find "$ROOT" -type f -name 'AppConfigAccessor.smali' -print -exec cat {} \;
+            echo
+            echo '=== ARouter generated classes ==='
+            find "$ROOT" -type f \( -name 'ARouter$$Providers$$*.smali' -o -name 'ARouter$$Root$$*.smali' -o -name 'ARouter$$Group$$*.smali' \) -print | sort | head -n 500
+            echo
+            echo '=== PreferenceApi/provider references ==='
+            grep -R -n -E 'PreferenceApi|preference.*provider|provider.*preference|KernelManager|getPreferenceApi' "$ROOT"/smali* --include='*.smali' | head -n 1500 || true
+            echo
+            echo '=== ARouter provider route references ==='
+            grep -R -n -E 'ARouter\$\$Providers|IProvider|providers|/preference|preference/' "$ROOT"/smali* --include='*.smali' | head -n 2000 || true
+          } | tee "$OUT"
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-runtime-crash-diagnostic
+          retention-days: 7
+          path: diag/DIRECTIVE_RUNTIME_CRASH_DIAGNOSTIC.txt
