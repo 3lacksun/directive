@@ -1,0 +1,197 @@
+name: Directive V2 Private Source Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive-v2-ci-probe-04092026
+    paths:
+      - '.github/workflows/directive-v2-public-build.yml'
+      - 'ci/directive-v2-build-trigger/**'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET: DIRECTIVE_V2_UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+  BUILD_RELEASE_TAG: directive-v2-ci-build-latest
+  APKTOOL_VERSION: 2.12.1
+  APKTOOL_SHA256: 66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
+  BUILD_TOOLS_VERSION: 35.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Require private-source token
+        shell: bash
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PRIVATE_TOKEN" ]; then
+            echo 'DIRECTIVE_V2_SOURCE_TOKEN is not configured.' >&2
+            exit 1
+          fi
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download authoritative source from private repository
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          gh release download "$SOURCE_TAG" \
+            --repo "$SOURCE_REPO" \
+            --pattern "$SOURCE_ASSET" \
+            --dir input
+          test -s "input/$SOURCE_ASSET"
+          echo "$SOURCE_SHA256  input/$SOURCE_ASSET" | sha256sum -c -
+          ls -lh "input/$SOURCE_ASSET"
+
+      - name: Extract and locate Apktool source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          unzip -q "input/$SOURCE_ASSET" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n 1)"
+          if [ -z "$SRC_ROOT" ]; then
+            echo 'apktool.yml not found' >&2
+            exit 1
+          fi
+          test -f "$SRC_ROOT/AndroidManifest.xml"
+          test -f "$SRC_ROOT/apktool.json"
+          echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
+          echo "Source root: $SRC_ROOT"
+
+      - name: Static offline and identity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET
+          root = pathlib.Path(os.environ['SRC_ROOT'])
+          tree = ET.parse(root/'AndroidManifest.xml')
+          r = tree.getroot()
+          if r.attrib.get('package') != 'com.ticktick.task':
+              raise SystemExit('FAIL package identity')
+          android = '{http://schemas.android.com/apk/res/android}'
+          perms = {e.attrib.get(android+'name') for e in r if e.tag in {'uses-permission','uses-permission-sdk-23'}}
+          forbidden = {
+              'android.permission.INTERNET',
+              'android.permission.ACCESS_NETWORK_STATE',
+              'android.permission.ACCESS_WIFI_STATE',
+              'android.permission.CHANGE_NETWORK_STATE',
+              'android.permission.CHANGE_WIFI_STATE',
+          }
+          bad = sorted(perms & forbidden)
+          if bad:
+              raise SystemExit('FAIL forbidden permissions: '+', '.join(bad))
+          app = r.find('application')
+          if app is None or app.attrib.get(android+'usesCleartextTraffic') != 'false':
+              raise SystemExit('FAIL cleartext traffic gate')
+          txt = (root/'res/values/strings.xml').read_text('utf-8', errors='ignore')
+          if 'Directive V2' not in txt:
+              raise SystemExit('FAIL Directive V2 app name')
+          print('PASS static offline/identity gate')
+          PY
+
+      - name: Download and verify Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
+            -o apktool.jar
+          echo "$APKTOOL_SHA256  apktool.jar" | sha256sum -c -
+          java -jar apktool.jar --version
+
+      - name: Build unsigned APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          java -Xmx6g -jar apktool.jar b "$SRC_ROOT" -o out/directive-v2-unsigned.apk
+          test -s out/directive-v2-unsigned.apk
+          ls -lh out/directive-v2-unsigned.apk
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "build-tools;$BUILD_TOOLS_VERSION"
+
+      - name: Align and sign CI APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          keytool -genkeypair -noprompt \
+            -keystore out/directive-v2-ci.keystore \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -dname 'CN=Directive V2 CI,O=Local Build,C=GB' \
+            -keyalg RSA -keysize 2048 -validity 10000
+          "$BT/zipalign" -f -v 4 out/directive-v2-unsigned.apk out/directive-v2-aligned.apk
+          "$BT/apksigner" sign \
+            --ks out/directive-v2-ci.keystore \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out out/Directive-V2-debug.apk \
+            out/directive-v2-aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs out/Directive-V2-debug.apk | tee out/apksigner-verify.txt
+
+      - name: Verify compiled APK offline gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/aapt" dump badging out/Directive-V2-debug.apk | tee out/aapt-badging.txt
+          "$BT/aapt" dump permissions out/Directive-V2-debug.apk | tee out/aapt-permissions.txt
+          grep -q "package: name='com.ticktick.task'" out/aapt-badging.txt
+          if grep -Eqi 'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/aapt-permissions.txt; then
+            echo 'FAIL compiled APK contains forbidden network permission' >&2
+            exit 1
+          fi
+          sha256sum out/Directive-V2-debug.apk | tee out/Directive-V2-debug.apk.sha256
+          echo 'PASS compiled APK offline gate'
+
+      - name: Publish APK privately back to Directive V2 repository
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$BUILD_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1; then
+            gh release create "$BUILD_RELEASE_TAG" \
+              --repo "$SOURCE_REPO" \
+              --target main \
+              --title 'Directive V2 CI Build' \
+              --notes 'CI-produced debug-signed APK and verification evidence from the authoritative offline source.'
+          fi
+          gh release upload "$BUILD_RELEASE_TAG" \
+            --repo "$SOURCE_REPO" \
+            out/Directive-V2-debug.apk \
+            out/Directive-V2-debug.apk.sha256 \
+            out/aapt-badging.txt \
+            out/aapt-permissions.txt \
+            out/apksigner-verify.txt \
+            --clobber
