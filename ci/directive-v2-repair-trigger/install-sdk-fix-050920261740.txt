@@ -1,0 +1,1 @@
+Trigger rebuild after restoring explicit minSdkVersion=23 and targetSdkVersion=35 to both AndroidManifest.xml and apktool.yml. Physical Android 16 evidence showed generic App not installed; prior AAPT badging omitted sdkVersion/targetSdkVersion and implied targetSdkVersion < 4, consistent with modern Android deprecated-SDK install rejection.
