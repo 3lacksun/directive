@@ -1,0 +1,120 @@
+name: Directive V2 Runtime Crash Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive-v2-ci-probe-04092026
+    paths:
+      - '.github/workflows/directive-v2-runtime-diagnostic.yml'
+      - 'ci/directive-v2-runtime-trigger/**'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  BUILD_RELEASE_TAG: directive-v2-ci-build-latest
+  APK_ASSET: Directive-V2-debug.apk
+  RUNTIME_RELEASE_TAG: directive-v2-runtime-diagnostic-latest
+  PACKAGE_ID: com.ticktick.task
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require private-source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_TOKEN"
+
+      - name: Download latest private APK
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p apk runtime-evidence
+          gh release download "$BUILD_RELEASE_TAG" --repo "$SOURCE_REPO" --pattern "$APK_ASSET" --dir apk
+          test -s "apk/$APK_ASSET"
+          sha256sum "apk/$APK_ASSET" | tee runtime-evidence/apk.sha256
+
+      - name: Boot emulator, install, launch, capture crash
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -u
+            adb wait-for-device
+            adb shell getprop ro.build.version.release | tee runtime-evidence/android-version.txt
+            adb install -r apk/Directive-V2-debug.apk 2>&1 | tee runtime-evidence/install.txt
+            INSTALL_RC=${PIPESTATUS[0]}
+            if [ "$INSTALL_RC" -ne 0 ]; then
+              echo "INSTALL_FAILED=$INSTALL_RC" | tee runtime-evidence/result.txt
+              exit 0
+            fi
+            adb logcat -c
+            adb shell am force-stop com.ticktick.task || true
+            adb shell monkey -p com.ticktick.task -c android.intent.category.LAUNCHER 1 2>&1 | tee runtime-evidence/launch.txt || true
+            sleep 12
+            adb shell dumpsys activity activities > runtime-evidence/dumpsys-activities.txt || true
+            adb shell dumpsys package com.ticktick.task > runtime-evidence/dumpsys-package.txt || true
+            adb logcat -d -v threadtime > runtime-evidence/logcat.txt || true
+            adb shell pidof com.ticktick.task > runtime-evidence/pid.txt 2>/dev/null || true
+            python3 - <<'PY'
+            from pathlib import Path
+            import re
+            text = Path('runtime-evidence/logcat.txt').read_text('utf-8', errors='replace')
+            lines = text.splitlines()
+            hits=[]
+            patterns=(r'FATAL EXCEPTION', r'AndroidRuntime', r'Process: com\.ticktick\.task', r'Unable to start', r'Unable to instantiate', r'ClassNotFoundException', r'NoClassDefFoundError', r'Resources\$NotFoundException', r'SecurityException', r'IllegalStateException', r'NullPointerException')
+            rx=re.compile('|'.join(patterns), re.I)
+            for i,line in enumerate(lines):
+                if rx.search(line):
+                    a=max(0,i-8); b=min(len(lines),i+55)
+                    hits.extend(lines[a:b])
+                    hits.append('---')
+            Path('runtime-evidence/crash-excerpt.txt').write_text('\n'.join(hits) if hits else 'NO_CRASH_SIGNATURE_FOUND\n','utf-8')
+            fatal = ('FATAL EXCEPTION' in text and ('com.ticktick.task' in text or 'Process: com.ticktick.task' in text))
+            pid=Path('runtime-evidence/pid.txt').read_text('utf-8', errors='ignore').strip()
+            result = f"fatal={str(fatal).lower()}\npid={pid or 'none'}\n"
+            Path('runtime-evidence/result.txt').write_text(result,'utf-8')
+            print(result)
+            PY
+
+      - name: Publish runtime evidence privately
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf directive-v2-runtime-evidence.tar.gz runtime-evidence
+          if ! gh release view "$RUNTIME_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1; then
+            gh release create "$RUNTIME_RELEASE_TAG" --repo "$SOURCE_REPO" --target main --title 'Directive V2 Runtime Diagnostic' --notes 'Automated emulator install/launch/logcat diagnostic evidence.'
+          fi
+          gh release upload "$RUNTIME_RELEASE_TAG" --repo "$SOURCE_REPO" directive-v2-runtime-evidence.tar.gz runtime-evidence/result.txt runtime-evidence/crash-excerpt.txt runtime-evidence/logcat.txt --clobber
+
+      - name: Evaluate runtime result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat runtime-evidence/result.txt || true
+          if grep -q '^fatal=true' runtime-evidence/result.txt 2>/dev/null; then
+            echo 'FAIL: Directive V2 fatal runtime crash reproduced' >&2
+            exit 1
+          fi
+          if grep -q '^INSTALL_FAILED=' runtime-evidence/result.txt 2>/dev/null; then
+            echo 'FAIL: emulator install failed' >&2
+            exit 1
+          fi
+          echo 'PASS: no package fatal crash detected in diagnostic window'
