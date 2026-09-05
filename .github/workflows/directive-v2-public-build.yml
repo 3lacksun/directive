@@ -40,7 +40,7 @@ jobs:
           fi
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -75,6 +75,17 @@ jobs:
           test -f "$SRC_ROOT/apktool.json"
           echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
           echo "Source root: $SRC_ROOT"
+
+      - name: Remove non-resource editor backups from res
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Removing editor/backup artefacts that AAPT2 cannot compile:'
+          find "$SRC_ROOT/res" -type f \( -name '*.original' -o -name '*.orig' -o -name '*.bak' -o -name '*~' \) -print -delete
+          if find "$SRC_ROOT/res" -type f \( -name '*.original' -o -name '*.orig' -o -name '*.bak' -o -name '*~' \) | grep -q .; then
+            echo 'FAIL backup artefacts remain under res/' >&2
+            exit 1
+          fi
 
       - name: Static offline and identity gate
         shell: bash
