@@ -1,0 +1,84 @@
+name: DIRECTIVE Coroutine Dispatcher Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-coroutines-diagnostic.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download and extract authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted diag
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE_DOWNLOADED="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE_DOWNLOADED"
+          echo "$SOURCE_SHA256  $SOURCE_DOWNLOADED" | sha256sum -c -
+          unzip -q "$SOURCE_DOWNLOADED" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Capture coroutine dispatcher implementation and service metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=diag/DIRECTIVE_COROUTINE_DISPATCHER_DIAGNOSTIC.txt
+          : > "$OUT"
+          {
+            echo '=== ck/r MainDispatchers implementation ==='
+            find "$ROOT" -type f -path '*/ck/r.smali' -print -exec cat {} \;
+            echo
+            echo '=== dispatcher-related class filenames ==='
+            find "$ROOT" -type f \( -iname '*Dispatcher*.smali' -o -iname '*MainDispatcher*.smali' -o -iname '*HandlerDispatcher*.smali' \) -print | sort
+            echo
+            echo '=== Main dispatcher / Android factory string references ==='
+            grep -R -n -E 'Module with the Main dispatcher|MainDispatcherFactory|AndroidDispatcherFactory|kotlinx.coroutines.android|HandlerContext|HandlerDispatcher' "$ROOT"/smali* --include='*.smali' | head -n 4000 || true
+            echo
+            echo '=== META-INF and service metadata ==='
+            find "$ROOT" -type f -path '*/META-INF/*' -print | sort | head -n 4000
+            echo
+            echo '=== service file contents matching coroutine/dispatcher ==='
+            while IFS= read -r f; do
+              case "$f" in
+                *coroutine*|*Coroutine*|*Dispatcher*|*dispatcher*|*Main*)
+                  echo "--- $f ---"
+                  cat "$f" || true
+                  echo
+                  ;;
+              esac
+            done < <(find "$ROOT" -type f -path '*/META-INF/*' | sort)
+            echo
+            echo '=== apktool metadata unknownFiles ==='
+            cat "$ROOT/apktool.yml"
+          } | tee "$OUT"
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-coroutine-dispatcher-diagnostic
+          retention-days: 7
+          path: diag/DIRECTIVE_COROUTINE_DISPATCHER_DIAGNOSTIC.txt
