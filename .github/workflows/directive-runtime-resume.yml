@@ -1,0 +1,130 @@
+name: DIRECTIVE Android 16 Acceptance Resume
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-runtime-resume.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  APPLICATION_ID: com.ticktick.task
+  TARGET_SDK: '37'
+  INSTALL_ABI: arm64-v8a
+  PRIVATE_CANDIDATE_TAG: directive-ci-candidate
+  PRIVATE_RELEASE_TAG: directive-ci-build-latest
+  CANDIDATE: DIRECTIVE_CANDIDATE_33998941109.apk
+
+jobs:
+  runtime_android16:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Require private DIRECTIVE source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Enable KVM for Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
+
+      - name: Download exact signed DIRECTIVE candidate and verify binary/runtime metadata
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate runtime-support out/runtime
+          gh release download "$PRIVATE_CANDIDATE_TAG" --repo "$SOURCE_REPO" --pattern "$CANDIDATE" --dir candidate
+          gh release download "$PRIVATE_CANDIDATE_TAG" --repo "$SOURCE_REPO" --pattern "$CANDIDATE.sha256" --dir candidate
+          EXPECTED="$(awk '{print $1; exit}' "candidate/$CANDIDATE.sha256")"
+          ACTUAL="$(sha256sum "candidate/$CANDIDATE" | awk '{print $1}')"
+          test -n "$EXPECTED"
+          test "$ACTUAL" = "$EXPECTED"
+          echo "$ACTUAL  $CANDIDATE" | tee out/DIRECTIVE_CANDIDATE_SHA256.txt
+
+          test "$(unzip -p "candidate/$CANDIDATE" META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory | tr -d '\r\n')" = 'kotlinx.coroutines.android.AndroidDispatcherFactory'
+          test "$(unzip -p "candidate/$CANDIDATE" META-INF/services/kotlinx.coroutines.CoroutineExceptionHandler | tr -d '\r\n')" = 'kotlinx.coroutines.android.AndroidExceptionPreHandler'
+          printf '%s\n' 'PASS: coroutine Android Main dispatcher ServiceLoader metadata is present in rebuilt APK' | tee out/DIRECTIVE_COROUTINE_SERVICE_GATE.txt
+
+          gh api "repos/$SOURCE_REPO/contents/support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh?ref=main" --jq .content | tr -d '\n' | base64 --decode > runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          chmod +x runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          echo "APK_PATH=candidate/$CANDIDATE" >> "$GITHUB_ENV"
+
+      - name: Android 16 translated ARM64 clean-install offline cold-launch acceptance
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        env:
+          APPLICATION_ID: ${{ env.APPLICATION_ID }}
+          APK_PATH: ${{ env.APK_PATH }}
+          TARGET_SDK: ${{ env.TARGET_SDK }}
+          INSTALL_ABI: ${{ env.INSTALL_ABI }}
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          cores: 2
+          ram-size: 3072M
+          emulator-boot-timeout: 1200
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: bash runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+
+      - name: Finalise timestamped DIRECTIVE private release after runtime PASS
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TIMESTAMP="$(TZ=Europe/London date +'%d%m%Y%H%M%S')"
+          FINAL_APK="DIRECTIVE_${TIMESTAMP}.apk"
+          FINAL_SHA="out/$FINAL_APK.sha256"
+          EVIDENCE_ZIP="out/DIRECTIVE_RUNTIME_EVIDENCE_${TIMESTAMP}.zip"
+          METADATA="out/DIRECTIVE_BUILD_METADATA_${TIMESTAMP}.txt"
+          cp "$APK_PATH" "out/$FINAL_APK"
+          (cd out && sha256sum "$FINAL_APK" > "$FINAL_APK.sha256")
+          zip -qr "$EVIDENCE_ZIP" out/runtime
+          {
+            echo 'Product: DIRECTIVE'
+            echo "APK: $FINAL_APK"
+            echo "Target SDK: $TARGET_SDK"
+            echo "Runtime ABI: $INSTALL_ABI via Android native bridge"
+            echo 'Coroutine Main dispatcher metadata: restored and binary-verified'
+            echo 'Android acceptance: API 36 / Android 16 / offline cold-launch + relaunch PASS'
+          } > "$METADATA"
+
+          gh release view "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null || gh release create "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" --title 'DIRECTIVE Runtime-Accepted Build' --notes 'Android 16 runtime-accepted offline DIRECTIVE APK.'
+
+          OLD_ASSETS="$(gh release view "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" --json assets --jq '.assets[].name' | grep -E '^DIRECTIVE_[0-9]{14}\.apk(\.sha256)?$|^DIRECTIVE_RUNTIME_EVIDENCE_[0-9]{14}\.zip$|^DIRECTIVE_BUILD_METADATA_[0-9]{14}\.txt$' || true)"
+          if [ -n "$OLD_ASSETS" ]; then
+            while IFS= read -r old; do
+              [ -n "$old" ] || continue
+              gh release delete-asset "$PRIVATE_RELEASE_TAG" "$old" --repo "$SOURCE_REPO" --yes || true
+            done <<< "$OLD_ASSETS"
+          fi
+
+          gh release upload "$PRIVATE_RELEASE_TAG" "out/$FINAL_APK" "$FINAL_SHA" "$METADATA" "$EVIDENCE_ZIP" out/runtime/DIRECTIVE_RUNTIME_VERDICT.txt out/runtime/DIRECTIVE_ANDROID_VERSION.txt out/runtime/DIRECTIVE_ANDROID_API.txt out/runtime/DIRECTIVE_DEVICE_ABI.txt out/runtime/DIRECTIVE_DEVICE_ABILIST.txt out/DIRECTIVE_COROUTINE_SERVICE_GATE.txt --repo "$SOURCE_REPO" --clobber
+          echo "FINAL_APK=$FINAL_APK" >> "$GITHUB_ENV"
+          echo "FINAL_TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Preserve runtime diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-runtime-resume-failure-evidence
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            out/runtime/
+            out/DIRECTIVE_CANDIDATE_SHA256.txt
+            out/DIRECTIVE_COROUTINE_SERVICE_GATE.txt
