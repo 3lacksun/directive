@@ -1,0 +1,82 @@
+name: DIRECTIVE Preference Provider Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-preference-diagnostic.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download and extract authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted diag/files
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE_DOWNLOADED="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE_DOWNLOADED"
+          echo "$SOURCE_SHA256  $SOURCE_DOWNLOADED" | sha256sum -c -
+          unzip -q "$SOURCE_DOWNLOADED" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Capture provider implementation and routing files
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=diag/DIRECTIVE_PREFERENCE_PROVIDER_DIAGNOSTIC.txt
+          : > "$OUT"
+          capture() {
+            local pattern="$1"
+            echo "=== $pattern ===" >> "$OUT"
+            while IFS= read -r f; do
+              echo "--- FILE: $f ---" >> "$OUT"
+              cat "$f" >> "$OUT"
+              echo >> "$OUT"
+            done < <(find "$ROOT" -type f -name "$pattern" | sort)
+          }
+          capture 'KernelManager.smali'
+          capture 'KernelManager$Companion.smali'
+          capture 'PreferenceManager.smali'
+          capture 'PreferenceManager$*.smali'
+          capture 'PreferenceAccessor.smali'
+          capture 'ARouter$$Providers$$TickTick.smali'
+          capture 'ARouter$$Group$$kernel.smali'
+          capture 'ARouter$$Root$$*.smali'
+          echo '=== LogisticsCenter / ARouter implementation candidates ===' >> "$OUT"
+          for rel in 'smali/j3/b.smali' 'smali/l3/a.smali' 'smali/k3/a.smali'; do
+            f="$ROOT/$rel"
+            if [ -f "$f" ]; then echo "--- FILE: $f ---" >> "$OUT"; cat "$f" >> "$OUT"; echo >> "$OUT"; fi
+          done
+          echo '=== PreferenceManager call sites / init references ===' >> "$OUT"
+          grep -R -n -E 'PreferenceManager;->|/kernel/preference|getPreferenceApi\(|PreferenceAccessor;-><clinit>|KernelManager;->init' "$ROOT"/smali* --include='*.smali' | head -n 2500 >> "$OUT" || true
+          wc -c "$OUT"
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-preference-provider-diagnostic
+          retention-days: 7
+          path: diag/DIRECTIVE_PREFERENCE_PROVIDER_DIAGNOSTIC.txt
