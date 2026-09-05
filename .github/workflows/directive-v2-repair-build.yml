@@ -146,3 +146,65 @@ jobs:
             out/native-abis.txt
             out/zipalign.txt
             out/DIRECTIVE_V2_PACKAGE_MIGRATION_REPORT.json
+
+  runtime_api30:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Download exact APK from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: directive-v2-runtime-compatible-apk
+          path: candidate
+
+      - name: ARM64 software-emulated Android 11 cold launch
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        env:
+          APPLICATION_ID: com.ticktick.task
+          APK_PATH: candidate/Directive-V2-runtime-compatible.apk
+        with:
+          api-level: 30
+          arch: arm64-v8a
+          target: default
+          profile: pixel_5
+          cores: 2
+          ram-size: 3072M
+          disable-linux-hw-accel: true
+          disable-animations: true
+          emulator-boot-timeout: 1800
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off
+          script: |
+            set -euo pipefail
+            mkdir -p runtime
+            adb wait-for-device
+            adb install "$APK_PATH" | tee runtime/install.txt
+            grep -q Success runtime/install.txt
+            adb shell svc wifi disable >/dev/null 2>&1 || true
+            adb shell svc data disable >/dev/null 2>&1 || true
+            adb shell am force-stop "$APPLICATION_ID" || true
+            adb logcat -c
+            adb shell monkey -p "$APPLICATION_ID" -c android.intent.category.LAUNCHER 1 | tee runtime/launch.txt
+            sleep 20
+            adb shell pidof "$APPLICATION_ID" | tr -d '\r' | tee runtime/pid.txt || true
+            adb logcat -d -v threadtime > runtime/logcat.txt || true
+            if [ ! -s runtime/pid.txt ]; then
+              echo 'FAIL process did not survive launch' >&2
+              grep -E -A 40 -B 8 'FATAL EXCEPTION|AndroidRuntime|Unable to start|Unable to instantiate|SecurityException|ClassNotFoundException|NoClassDefFoundError|UnsatisfiedLinkError|VerifyError' runtime/logcat.txt >&2 || true
+              exit 1
+            fi
+            grep -E -A 40 -B 8 'FATAL EXCEPTION|AndroidRuntime|Unable to start|Unable to instantiate|SecurityException|ClassNotFoundException|NoClassDefFoundError|UnsatisfiedLinkError|VerifyError' runtime/logcat.txt > runtime/crash-context.txt || true
+            if grep -Eq 'com\.ticktick\.task' runtime/crash-context.txt; then
+              cat runtime/crash-context.txt >&2
+              exit 1
+            fi
+            echo 'PASS clean install and cold launch survived' | tee runtime/verdict.txt
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-v2-runtime-api30-evidence
+          retention-days: 30
+          if-no-files-found: warn
+          path: runtime/
