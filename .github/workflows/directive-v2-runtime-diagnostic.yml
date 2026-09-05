@@ -21,7 +21,7 @@ env:
 
 jobs:
   runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - name: Require private-source token
@@ -77,7 +77,7 @@ jobs:
           import re
           text = Path('runtime-evidence/logcat.txt').read_text('utf-8', errors='replace')
           lines = text.splitlines()
-          patterns=(r'FATAL EXCEPTION', r'AndroidRuntime', r'Process: com\.ticktick\.task', r'Unable to start', r'Unable to instantiate', r'ClassNotFoundException', r'NoClassDefFoundError', r'Resources\$NotFoundException', r'SecurityException', r'IllegalStateException', r'NullPointerException', r'RuntimeException')
+          patterns=(r'FATAL EXCEPTION', r'AndroidRuntime', r'Process: com\.ticktick\.task', r'Unable to start', r'Unable to instantiate', r'ClassNotFoundException', r'NoClassDefFoundError', r'Resources\$NotFoundException', r'SecurityException', r'IllegalStateException', r'NullPointerException', r'RuntimeException', r'UnsatisfiedLinkError')
           rx=re.compile('|'.join(patterns), re.I)
           keep=[]
           seen=set()
