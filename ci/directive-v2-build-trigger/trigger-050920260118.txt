@@ -1,0 +1,4 @@
+Trigger Directive V2 private-source build from verified release asset.
+Source repo: 3lacksun/-directive-v2-offline
+Tag: directive-v2-source-04092026
+SHA-256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
