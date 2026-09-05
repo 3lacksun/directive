@@ -1,0 +1,113 @@
+name: DIRECTIVE Android 16 ARM64 No-Accel Acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-runtime-macos-noaccel.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  PRIVATE_CANDIDATE_TAG: directive-ci-candidate
+  PRIVATE_RELEASE_TAG: directive-ci-build-latest
+  CANDIDATE_NAME: DIRECTIVE_CANDIDATE_33984385490.apk
+  CANDIDATE_SHA256: c7570d5024bda5164e4f3d5ec4f1fdd510da623cdebee67bb3b332951b8fc495
+  APPLICATION_ID: com.ticktick.task
+  TARGET_SDK: '37'
+
+jobs:
+  android16_arm64_noaccel:
+    name: Android 16 ARM64 no-acceleration clean launch
+    runs-on: macos-15-arm64
+    timeout-minutes: 60
+    steps:
+      - name: Require private DIRECTIVE source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download exact signed DIRECTIVE candidate and verifier
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate runtime-support out/runtime
+          gh release download "$PRIVATE_CANDIDATE_TAG" --repo "$SOURCE_REPO" \
+            --pattern "$CANDIDATE_NAME" --dir candidate
+          echo "$CANDIDATE_SHA256  candidate/$CANDIDATE_NAME" | shasum -a 256 -c -
+          gh api "repos/$SOURCE_REPO/contents/support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh?ref=main" \
+            --jq .content | tr -d '\n' | base64 --decode \
+            > runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          chmod +x runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          echo "APK_PATH=candidate/$CANDIDATE_NAME" >> "$GITHUB_ENV"
+
+      - name: Android 16 ARM64 clean-install offline cold-launch acceptance without HVF
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        env:
+          APPLICATION_ID: ${{ env.APPLICATION_ID }}
+          APK_PATH: ${{ env.APK_PATH }}
+          TARGET_SDK: ${{ env.TARGET_SDK }}
+        with:
+          api-level: 36
+          arch: arm64-v8a
+          target: default
+          profile: pixel_5
+          cores: 2
+          ram-size: 3072M
+          disable-animations: true
+          emulator-boot-timeout: 1800
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -accel off -no-metrics
+          script: bash runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+
+      - name: Finalise timestamped runtime-accepted DIRECTIVE APK
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TIMESTAMP="$(TZ=Europe/London date +'%d%m%Y%H%M%S')"
+          FINAL_APK="out/DIRECTIVE_${TIMESTAMP}.apk"
+          FINAL_SHA="${FINAL_APK}.sha256"
+          EVIDENCE_ZIP="out/DIRECTIVE_RUNTIME_EVIDENCE_${TIMESTAMP}.zip"
+          cp "candidate/$CANDIDATE_NAME" "$FINAL_APK"
+          shasum -a 256 "$FINAL_APK" | tee "$FINAL_SHA"
+          ACTUAL="$(shasum -a 256 "$FINAL_APK" | awk '{print $1}')"
+          test "$ACTUAL" = "$CANDIDATE_SHA256"
+          ditto -c -k --sequesterRsrc --keepParent out/runtime "$EVIDENCE_ZIP"
+          {
+            echo 'Product: DIRECTIVE'
+            echo 'Android 16 ARM64 runtime acceptance: PASS'
+            echo 'Acceleration: disabled (HVF bypass)'
+            echo "Target SDK: $TARGET_SDK"
+            echo "APK SHA-256: $ACTUAL"
+          } > out/DIRECTIVE_RELEASE_METADATA.txt
+
+          gh release view "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1 \
+            || gh release create "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" \
+                 --title 'DIRECTIVE Runtime-Accepted Build' \
+                 --notes 'Runtime-accepted Android 16 offline DIRECTIVE APK.'
+
+          gh release view "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" --json assets --jq '.assets[].name' \
+            | grep -E '^DIRECTIVE_[0-9]{14}\.apk(\.sha256)?$|^DIRECTIVE_RUNTIME_EVIDENCE_[0-9]{14}\.zip$|^DIRECTIVE_RELEASE_METADATA\.txt$' \
+            | while IFS= read -r old; do
+                gh release delete-asset "$PRIVATE_RELEASE_TAG" "$old" --repo "$SOURCE_REPO" --yes || true
+              done
+
+          gh release upload "$PRIVATE_RELEASE_TAG" \
+            "$FINAL_APK" "$FINAL_SHA" "$EVIDENCE_ZIP" out/DIRECTIVE_RELEASE_METADATA.txt \
+            --repo "$SOURCE_REPO" --clobber
+          printf 'PASS: Android 16 ARM64 no-accel runtime accepted and privately published %s\n' "$(basename "$FINAL_APK")"
+
+      - name: Preserve runtime diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-android16-arm64-noaccel-failure-evidence
+          retention-days: 7
+          if-no-files-found: warn
+          path: out/runtime/
