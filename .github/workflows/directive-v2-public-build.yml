@@ -87,6 +87,37 @@ jobs:
             exit 1
           fi
 
+      - name: Preserve authoritative SDK metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          root = pathlib.Path(os.environ['SRC_ROOT'])
+          meta = json.loads((root / 'apktool.json').read_text('utf-8'))
+          sdk = meta.get('sdkInfo') or {}
+          min_sdk = str(sdk.get('minSdkVersion', ''))
+          target_sdk = str(sdk.get('targetSdkVersion', ''))
+          if (min_sdk, target_sdk) != ('21', '37'):
+              raise SystemExit(f'FAIL unexpected authoritative sdkInfo: {sdk!r}')
+          yml = root / 'apktool.yml'
+          text = yml.read_text('utf-8')
+          replacement = "sdkInfo:\n  minSdkVersion: '21'\n  targetSdkVersion: '37'"
+          null_marker = re.compile(r'(?m)^sdkInfo:\s*null\s*$')
+          existing_block = re.compile(r"(?ms)^sdkInfo:\s*\n(?:  .*\n)*?(?=^[A-Za-z][A-Za-z0-9_]*:|\Z)")
+          if null_marker.search(text):
+              text = null_marker.sub(replacement, text, count=1)
+          elif existing_block.search(text):
+              text = existing_block.sub(replacement + '\n', text, count=1)
+          else:
+              raise SystemExit('FAIL apktool.yml sdkInfo adapter block missing')
+          yml.write_text(text, 'utf-8')
+          verify = yml.read_text('utf-8')
+          if "minSdkVersion: '21'" not in verify or "targetSdkVersion: '37'" not in verify:
+              raise SystemExit('FAIL sdkInfo translation verification')
+          print('PASS preserved sdkInfo min=21 target=37')
+          PY
+
       - name: Static offline and identity gate
         shell: bash
         run: |
@@ -116,7 +147,10 @@ jobs:
           txt = (root/'res/values/strings.xml').read_text('utf-8', errors='ignore')
           if 'Directive V2' not in txt:
               raise SystemExit('FAIL Directive V2 app name')
-          print('PASS static offline/identity gate')
+          yml = (root/'apktool.yml').read_text('utf-8')
+          if "minSdkVersion: '21'" not in yml or "targetSdkVersion: '37'" not in yml:
+              raise SystemExit('FAIL authoritative sdkInfo not preserved')
+          print('PASS static offline/identity/sdk gate')
           PY
 
       - name: Download and verify Apktool
@@ -170,7 +204,7 @@ jobs:
             out/directive-v2-aligned.apk
           "$BT/apksigner" verify --verbose --print-certs out/Directive-V2-debug.apk | tee out/apksigner-verify.txt
 
-      - name: Verify compiled APK offline gate
+      - name: Verify compiled APK offline and SDK gate
         shell: bash
         run: |
           set -euo pipefail
@@ -178,12 +212,14 @@ jobs:
           "$BT/aapt" dump badging out/Directive-V2-debug.apk | tee out/aapt-badging.txt
           "$BT/aapt" dump permissions out/Directive-V2-debug.apk | tee out/aapt-permissions.txt
           grep -q "package: name='com.ticktick.task'" out/aapt-badging.txt
+          grep -q "sdkVersion:'21'" out/aapt-badging.txt
+          grep -q "targetSdkVersion:'37'" out/aapt-badging.txt
           if grep -Eqi 'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/aapt-permissions.txt; then
             echo 'FAIL compiled APK contains forbidden network permission' >&2
             exit 1
           fi
           sha256sum out/Directive-V2-debug.apk | tee out/Directive-V2-debug.apk.sha256
-          echo 'PASS compiled APK offline gate'
+          echo 'PASS compiled APK offline/sdk gate: min=21 target=37'
 
       - name: Publish APK privately back to Directive V2 repository
         env:
