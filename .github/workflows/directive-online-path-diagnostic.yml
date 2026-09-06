@@ -48,29 +48,16 @@ jobs:
           set -euo pipefail
           OUT=diag/DIRECTIVE_OFFLINE_PATH_DIAGNOSTIC.txt
           : > "$OUT"
-          for rel in \
-            smali_classes2/l8/o.smali \
-            smali_classes2/l8/o\$a.smali \
-            smali_classes4/com/ticktick/task/utils/Utils.smali \
-            smali_classes4/com/ticktick/task/utils/DataTracker\$Companion.smali; do
-            f="$ROOT/$rel"
-            echo "=== FILE: $rel ===" >> "$OUT"
-            test -f "$f"
-            cat "$f" >> "$OUT"
-            echo >> "$OUT"
-          done
-          echo '=== MeTaskActivity UserCountryDecider launch region ===' >> "$OUT"
-          sed -n '840,1080p' "$ROOT/smali_classes2/com/ticktick/task/activity/MeTaskActivity.smali" >> "$OUT"
-          echo '=== HttpUrlBuilderTick country-decision region ===' >> "$OUT"
-          sed -n '80,210p' "$ROOT/smali_classes3/com/ticktick/task/helper/HttpUrlBuilderTick.smali" >> "$OUT"
-          echo '=== TickTickUtils country-decision region ===' >> "$OUT"
-          sed -n '110,230p' "$ROOT/smali_classes4/com/ticktick/task/utils/TickTickUtils.smali" >> "$OUT"
-          echo '=== UserCountryDecider call sites ===' >> "$OUT"
-          grep -R -n -E 'Ll8/o;|Ll8/o\$a;' "$ROOT"/smali* --include='*.smali' >> "$OUT" || true
-          echo '=== DataTracker init/call sites ===' >> "$OUT"
-          grep -R -n -E 'DataTracker\$Companion;->(init|sendActivationEvent|upload)|DataTracker;->' "$ROOT"/smali* --include='*.smali' >> "$OUT" || true
-          echo '=== connectivity and config sync call sites ===' >> "$OUT"
-          grep -R -n -E 'Utils;->isInNetwork|ConfigCore;->allowSync|PreferenceManager;->sync|AppConfigWorker' "$ROOT"/smali* --include='*.smali' >> "$OUT" || true
+          echo '=== Google Analytics / GAv4 / analytics identifiers ===' >> "$OUT"
+          grep -R -n -i -E 'google[._ ]?analytics|GAv4|analytics|Tracker|Measurement|CampaignTracking|AnalyticsReceiver|AnalyticsService' "$ROOT"/smali* "$ROOT/AndroidManifest.xml" "$ROOT/res" --include='*.smali' --include='*.xml' 2>/dev/null | head -n 4000 >> "$OUT" || true
+          echo '=== ACCESS_NETWORK_STATE references ===' >> "$OUT"
+          grep -R -n -E 'ACCESS_NETWORK_STATE|ConnectivityManager;->getActiveNetworkInfo' "$ROOT"/smali* "$ROOT/AndroidManifest.xml" --include='*.smali' --include='*.xml' 2>/dev/null | head -n 2000 >> "$OUT" || true
+          echo '=== analytics package/class inventory ===' >> "$OUT"
+          find "$ROOT" -type f \( -path '*google/android/gms/analytics*' -o -path '*analytics*' \) -print | sort | head -n 3000 >> "$OUT" || true
+          echo '=== Manifest analytics components ===' >> "$OUT"
+          grep -n -i -E 'analytics|measurement|campaign' "$ROOT/AndroidManifest.xml" >> "$OUT" || true
+          echo '=== Existing offline cleanup targets ===' >> "$OUT"
+          grep -R -n -E 'DataTracker\$Companion;->(init|sendActivationEvent|upload)|Utils;->isInNetwork|Ll8/o;|Ll8/o\$a;' "$ROOT"/smali* --include='*.smali' | head -n 2000 >> "$OUT" || true
           wc -c "$OUT"
 
       - name: Upload diagnostic
