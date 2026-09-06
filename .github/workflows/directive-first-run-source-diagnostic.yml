@@ -46,8 +46,13 @@ jobs:
           set -euo pipefail
           for name in \
             NewUserConfigHelper.smali \
+            'NewUserConfigHelper$onNewUserConfigDone$1.smali' \
+            'NewUserConfigHelper$tryShowNewUserConfig$1.smali' \
             NewUserConfigActivityHelper.smali \
+            'NewUserConfigActivityHelper$completeConfig$1.smali' \
             NewUserConfigActivity.smali \
+            NewUserConfigViewModel.smali \
+            NewUseConfigCache.smali \
             RetentionConfigManager.smali \
             NewbieDispatchActivity.smali; do
             mapfile -t hits < <(find "$ROOT" -type f -name "$name" -print)
@@ -57,7 +62,7 @@ jobs:
             fi
             cp "${hits[0]}" "selected/$name"
           done
-          grep -RniE 'tryShowNewUserConfig|completeConfig|goToMainActivity|shouldCreatePresetTask|refreshUserGuide|tryLoadUserGuide|newUserConfigDone|Continue|onNewUserConfigDone|saveUserConfigTabBar|applyUserTabBarConfig' selected \
+          grep -RniE 'tryShowNewUserConfig|completeConfig|goToMainActivity|shouldCreatePresetTask|refreshUserGuide|tryLoadUserGuide|newUserConfigDone|configFinish|selectTabs|userSelectTabs|onNewUserConfigDone|saveUserConfigTabBar|applyUserTabBarConfig' selected \
             > selected/KEY_METHOD_INDEX.txt || true
           sha256sum selected/* > selected/SHA256SUMS.txt
 
