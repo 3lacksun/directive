@@ -241,7 +241,7 @@ jobs:
             --pattern "$CANDIDATE" --dir candidate
           gh release download "$PRIVATE_CANDIDATE_TAG" --repo "$SOURCE_REPO" \
             --pattern "$CANDIDATE.sha256" --dir candidate
-          sha256sum -c "candidate/$CANDIDATE.sha256"
+          (cd candidate && sed -E "s#(^[0-9a-fA-F]{64})  .*/#\1  #" "$CANDIDATE.sha256" | sha256sum -c -)
           gh api "repos/$SOURCE_REPO/contents/support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh?ref=main" \
             --jq .content | tr -d '\n' | base64 --decode \
             > runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
