@@ -74,6 +74,20 @@ jobs:
           grep -R -n -i -E 'btn_suggest|Create Account|Save your tasks to the cloud|sign in now' "$ROOT"/smali* --include='*.smali' \
             | grep '/com/ticktick/' | head -n 4000 >> "$OUT" || true
 
+          echo '=== V7EmptyViewLayout full class ===' >> "$OUT"
+          V7="$(find "$ROOT" -path '*/com/ticktick/task/view/V7EmptyViewLayout.smali' -print -quit)"
+          if [ -n "$V7" ]; then
+            echo "===== ${V7#$ROOT/} =====" >> "$OUT"
+            sed -n '1,2600p' "$V7" >> "$OUT"
+          fi
+
+          echo '=== EmptyViewLayout full class ===' >> "$OUT"
+          EV="$(find "$ROOT" -path '*/com/ticktick/task/view/EmptyViewLayout.smali' -print -quit)"
+          if [ -n "$EV" ]; then
+            echo "===== ${EV#$ROOT/} =====" >> "$OUT"
+            sed -n '1,2200p' "$EV" >> "$OUT"
+          fi
+
           wc -c "$OUT"
 
       - name: Upload diagnostic
