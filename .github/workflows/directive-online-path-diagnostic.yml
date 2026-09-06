@@ -59,6 +59,12 @@ jobs:
             cat "$f" >> "$OUT"
             echo >> "$OUT"
           done
+          echo '=== MeTaskActivity UserCountryDecider launch region ===' >> "$OUT"
+          sed -n '840,1080p' "$ROOT/smali_classes2/com/ticktick/task/activity/MeTaskActivity.smali" >> "$OUT"
+          echo '=== HttpUrlBuilderTick country-decision region ===' >> "$OUT"
+          sed -n '80,210p' "$ROOT/smali_classes3/com/ticktick/task/helper/HttpUrlBuilderTick.smali" >> "$OUT"
+          echo '=== TickTickUtils country-decision region ===' >> "$OUT"
+          sed -n '110,230p' "$ROOT/smali_classes4/com/ticktick/task/utils/TickTickUtils.smali" >> "$OUT"
           echo '=== UserCountryDecider call sites ===' >> "$OUT"
           grep -R -n -E 'Ll8/o;|Ll8/o\$a;' "$ROOT"/smali* --include='*.smali' >> "$OUT" || true
           echo '=== DataTracker init/call sites ===' >> "$OUT"
