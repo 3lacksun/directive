@@ -1,0 +1,2 @@
+DIRECTIVE direct-entry acceptance rebuild.
+Private remediation baseline includes login/onboarding bypass, PayCheckHelper offline cleanup, cloud/account empty-state bypass, and strengthened usable-organiser runtime gate.
