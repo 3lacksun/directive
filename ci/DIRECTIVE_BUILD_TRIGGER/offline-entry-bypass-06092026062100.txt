@@ -1,0 +1,3 @@
+DIRECTIVE rebuild trigger
+Timestamp: 06092026062100
+Purpose: pull private support commit 242ebfceff3bc499d7d53a041a2fb00aef03414e and verify that a fresh offline install bypasses LoginMainActivity into the existing organiser while preserving all existing DIRECTIVE functionality.
