@@ -1,0 +1,37 @@
+name: DIRECTIVE V2 Apktool Cache
+
+on:
+  push:
+    branches:
+      - directive-v2-tooling-06092026
+    paths:
+      - '.github/workflows/directive-v2-apktool-cache.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cache-apktool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download pinned Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
+            -o apktool_2.12.1.jar
+          echo '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  apktool_2.12.1.jar' | sha256sum -c -
+          java -jar apktool_2.12.1.jar --version
+          sha256sum apktool_2.12.1.jar > apktool_2.12.1.jar.sha256
+      - name: Upload pinned Apktool
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-v2-apktool-2.12.1
+          path: |
+            apktool_2.12.1.jar
+            apktool_2.12.1.jar.sha256
+          if-no-files-found: error
+          retention-days: 7
