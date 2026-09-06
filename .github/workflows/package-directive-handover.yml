@@ -161,9 +161,14 @@ jobs:
           set -euo pipefail
           gh release view "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" >/dev/null \
             || gh release create "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" --title 'DIRECTIVE Verified Handover' --notes 'Current verified DIRECTIVE direct-entry handover.'
-          gh release view "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name' \
-            | grep -E '^DIRECTIVE_HANDOVER_[0-9]{14}\.zip(\.sha256)?$' \
-            | while IFS= read -r old; do gh release delete-asset "$HANDOVER_RELEASE_TAG" "$old" --repo "$PRIVATE_REPO" --yes || true; done
+          OLD_ASSETS="$(gh release view "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name' \
+            | grep -E '^DIRECTIVE_HANDOVER_[0-9]{14}\.zip(\.sha256)?$' || true)"
+          if [ -n "$OLD_ASSETS" ]; then
+            while IFS= read -r old; do
+              [ -n "$old" ] || continue
+              gh release delete-asset "$HANDOVER_RELEASE_TAG" "$old" --repo "$PRIVATE_REPO" --yes || true
+            done <<< "$OLD_ASSETS"
+          fi
           gh release upload "$HANDOVER_RELEASE_TAG" "$HANDOVER_ZIP" "$HANDOVER_SHA_FILE" --repo "$PRIVATE_REPO" --clobber
 
       - name: Upload verified handover artifact
