@@ -1,0 +1,390 @@
+name: DIRECTIVE EXEC002 Runtime Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-exec002-runtime-release.yml'
+      - 'ci/DIRECTIVE_EXEC002_RUNTIME_RELEASE_TRIGGER/**'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  STATIC_RUN_ID: '34054145179'
+  STATIC_ARTIFACT: DIRECTIVE-EXEC002-static-complete-v3
+  STATIC_CANDIDATE_SHA256: e9f9bdbc7cfb85ba31378c364bd87a0f9d7ee4b1967c84dd176b78d4b37fa7cc
+  APPLICATION_ID: com.ticktick.task
+  MIN_SDK: '21'
+  TARGET_SDK: '37'
+  INSTALL_ABI: arm64-v8a
+  BUILD_TOOLS_VERSION: 35.0.0
+  PRIVATE_RELEASE_TAG: directive-exec002-latest
+
+jobs:
+  sign_exact_static_candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Download sealed EXEC002 static-complete artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.STATIC_ARTIFACT }}
+          path: static
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.STATIC_RUN_ID }}
+
+      - name: Verify exact static candidate and completion verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f static/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk
+          test -f static/DIRECTIVE_EXEC002_STATIC_COMPLETION.md
+          grep -q '^STATIC_COMPLETION=PASS$' static/DIRECTIVE_EXEC002_STATIC_COMPLETION.md
+          ACTUAL="$(sha256sum static/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | awk '{print $1}')"
+          test "$ACTUAL" = "$STATIC_CANDIDATE_SHA256"
+          printf '%s  %s\n' "$ACTUAL" static/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | tee static/DIRECTIVE_EXEC002_STATIC_CANDIDATE_LOCK.txt
+
+      - name: Set up Java 21 and Android signing tools
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "build-tools;$BUILD_TOOLS_VERSION" platform-tools
+
+      - name: Fetch authoritative DIRECTIVE signer material
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          mkdir -p signing out
+          gh api "repos/$SOURCE_REPO/contents/support/DIRECTIVE_TEST_SIGNING_KEYSTORE.b64?ref=main" --jq .content \
+            | tr -d '\n' | base64 --decode > signing/DIRECTIVE_TEST_SIGNING_KEYSTORE.b64
+          gh api "repos/$SOURCE_REPO/contents/.github/workflows/build-directive.yml?ref=main" --jq .content \
+            | tr -d '\n' | base64 --decode > signing/build-directive.yml
+          base64 --decode signing/DIRECTIVE_TEST_SIGNING_KEYSTORE.b64 > signing/DIRECTIVE_TEST_SIGNING_KEYSTORE.keystore
+          SIGNING_ALIAS="$(awk '/^[[:space:]]*SIGNING_ALIAS:/ {print $2; exit}' signing/build-directive.yml)"
+          SIGNING_STOREPASS="$(awk '/^[[:space:]]*SIGNING_STOREPASS:/ {print $2; exit}' signing/build-directive.yml)"
+          SIGNING_CERT_SHA256="$(awk '/^[[:space:]]*SIGNING_CERT_SHA256:/ {print $2; exit}' signing/build-directive.yml)"
+          test -n "$SIGNING_ALIAS" && test -n "$SIGNING_STOREPASS" && test -n "$SIGNING_CERT_SHA256"
+          ACTUAL_CERT="$({ keytool -exportcert -keystore signing/DIRECTIVE_TEST_SIGNING_KEYSTORE.keystore -storepass "$SIGNING_STOREPASS" -alias "$SIGNING_ALIAS" -rfc; } \
+            | openssl x509 -noout -fingerprint -sha256 | sed 's/.*=//;s/://g')"
+          test "$ACTUAL_CERT" = "$SIGNING_CERT_SHA256"
+          printf 'DIRECTIVE signing certificate SHA-256: %s\n' "$ACTUAL_CERT" > out/DIRECTIVE_SIGNING_CERT.txt
+          printf 'SIGNING_ALIAS=%s\nSIGNING_STOREPASS=%s\n' "$SIGNING_ALIAS" "$SIGNING_STOREPASS" >> "$GITHUB_ENV"
+
+      - name: Align sign and verify the exact static-complete bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/zipalign" -f -P 16 -v 4 static/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk out/DIRECTIVE_EXEC002_ALIGNED.apk > out/DIRECTIVE_ZIPALIGN.txt
+          "$BT/zipalign" -c -P 16 -v 4 out/DIRECTIVE_EXEC002_ALIGNED.apk >> out/DIRECTIVE_ZIPALIGN.txt
+          "$BT/apksigner" sign \
+            --ks signing/DIRECTIVE_TEST_SIGNING_KEYSTORE.keystore \
+            --ks-key-alias "$SIGNING_ALIAS" \
+            --ks-pass "pass:$SIGNING_STOREPASS" \
+            --key-pass "pass:$SIGNING_STOREPASS" \
+            --out out/DIRECTIVE_EXEC002_SIGNED.apk out/DIRECTIVE_EXEC002_ALIGNED.apk
+          "$BT/apksigner" verify --verbose --print-certs out/DIRECTIVE_EXEC002_SIGNED.apk | tee out/DIRECTIVE_APKSIGNER_VERIFY.txt
+          "$BT/zipalign" -c -P 16 -v 4 out/DIRECTIVE_EXEC002_SIGNED.apk >> out/DIRECTIVE_ZIPALIGN.txt
+          sha256sum out/DIRECTIVE_EXEC002_SIGNED.apk | tee out/DIRECTIVE_EXEC002_SIGNED.apk.sha256
+
+      - name: Reverify signed binary identity offline boundary ABI and planner registration
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/aapt" dump badging out/DIRECTIVE_EXEC002_SIGNED.apk | tee out/DIRECTIVE_AAPT_BADGING.txt
+          "$BT/aapt" dump permissions out/DIRECTIVE_EXEC002_SIGNED.apk | tee out/DIRECTIVE_AAPT_PERMISSIONS.txt
+          "$BT/aapt" dump xmltree out/DIRECTIVE_EXEC002_SIGNED.apk AndroidManifest.xml | tee out/DIRECTIVE_AAPT_MANIFEST.txt
+          grep -q "package: name='$APPLICATION_ID'" out/DIRECTIVE_AAPT_BADGING.txt
+          grep -q "sdkVersion:'$MIN_SDK'" out/DIRECTIVE_AAPT_BADGING.txt
+          grep -q "targetSdkVersion:'$TARGET_SDK'" out/DIRECTIVE_AAPT_BADGING.txt
+          grep -q "application-label:'DIRECTIVE'" out/DIRECTIVE_AAPT_BADGING.txt
+          grep -q 'com.directive.planner.DirectivePlannerActivity' out/DIRECTIVE_AAPT_MANIFEST.txt
+          if grep -Eqi 'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/DIRECTIVE_AAPT_PERMISSIONS.txt; then
+            echo 'FAIL: forbidden network permission present after signing' >&2; exit 1
+          fi
+          ABIS="$(unzip -Z1 out/DIRECTIVE_EXEC002_SIGNED.apk | sed -n 's#^lib/\([^/]*\)/.*\.so$#\1#p' | sort -u | tr '\n' ' ')"
+          echo "Native ABIs: ${ABIS:-none}" | tee out/DIRECTIVE_NATIVE_ABIS.txt
+          grep -qw arm64-v8a <<<"$ABIS"
+          unzip -t out/DIRECTIVE_EXEC002_SIGNED.apk > out/DIRECTIVE_SIGNED_ZIP_TEST.txt
+          echo 'PASS: signed EXEC002 binary identity, SDK, offline boundary, ABI and planner registration' | tee out/DIRECTIVE_SIGNED_BINARY_VERDICT.txt
+
+      - name: Carry static completion evidence into signed candidate artifact
+        shell: bash
+        run: |
+          cp static/DIRECTIVE_EXEC002_STATIC_COMPLETION.md out/
+          cp static/DIRECTIVE_BALANCED_UPGRADE_PATCH_REPORT.json out/ 2>/dev/null || true
+          cp static/DIRECTIVE_PACKAGE_PREPARATION_REPORT.json out/ 2>/dev/null || true
+          cp static/10_BALANCED_FEATURE_STATIC_MATRIX.txt out/ 2>/dev/null || true
+
+      - name: Upload exact signed candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-EXEC002-signed-candidate
+          path: out/
+          if-no-files-found: error
+          retention-days: 90
+
+  runtime_android16:
+    needs: sign_exact_static_candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Download exact signed candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: DIRECTIVE-EXEC002-signed-candidate
+          path: signed
+
+      - name: Verify signed candidate sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f signed/DIRECTIVE_EXEC002_SIGNED.apk
+          test -f signed/DIRECTIVE_EXEC002_SIGNED.apk.sha256
+          (cd signed && sha256sum -c DIRECTIVE_EXEC002_SIGNED.apk.sha256)
+          echo "APK_PATH=$PWD/signed/DIRECTIVE_EXEC002_SIGNED.apk" >> "$GITHUB_ENV"
+
+      - name: Enable KVM for Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
+
+      - name: Fetch established DIRECTIVE Android 16 runtime verifier
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-support out/runtime
+          gh api "repos/$SOURCE_REPO/contents/support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh?ref=main" --jq .content \
+            | tr -d '\n' | base64 --decode > runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          chmod +x runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          bash -n runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          sha256sum runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh | tee out/runtime/DIRECTIVE_RUNTIME_VERIFIER.sha256
+
+      - name: Android 16 translated ARM64 clean-install offline acceptance and Master Plan smoke
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        env:
+          APPLICATION_ID: ${{ env.APPLICATION_ID }}
+          APK_PATH: ${{ env.APK_PATH }}
+          TARGET_SDK: ${{ env.TARGET_SDK }}
+          INSTALL_ABI: ${{ env.INSTALL_ABI }}
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          cores: 2
+          ram-size: 3072M
+          emulator-boot-timeout: 1200
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: |
+            set -euo pipefail
+            bash runtime-support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+
+            # Open the app drawer from the verified organiser screen and locate the
+            # repurposed local-only Master Plan entry by text, avoiding hard-coded
+            # assumptions about its row position.
+            adb shell input tap 70 210
+            sleep 2
+            for i in 1 2 3; do
+              adb shell uiautomator dump /sdcard/DIRECTIVE_EXEC002_DRAWER.xml >/dev/null 2>&1 || true
+              adb pull /sdcard/DIRECTIVE_EXEC002_DRAWER.xml out/runtime/DIRECTIVE_EXEC002_DRAWER.xml >/dev/null 2>&1 || true
+              [ -s out/runtime/DIRECTIVE_EXEC002_DRAWER.xml ] && break
+              sleep 2
+            done
+            grep -q 'text="Master Plan"' out/runtime/DIRECTIVE_EXEC002_DRAWER.xml
+            python3 - <<'PY'
+            import re,subprocess,xml.etree.ElementTree as ET
+            root=ET.parse('out/runtime/DIRECTIVE_EXEC002_DRAWER.xml').getroot()
+            node=next((n for n in root.iter('node') if n.attrib.get('text')=='Master Plan'),None)
+            if node is None: raise SystemExit('Master Plan drawer entry not found')
+            m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',node.attrib.get('bounds',''))
+            if not m: raise SystemExit('Master Plan bounds unavailable')
+            x1,y1,x2,y2=map(int,m.groups())
+            subprocess.check_call(['adb','shell','input','tap',str((x1+x2)//2),str((y1+y2)//2)])
+            PY
+            sleep 4
+            adb shell dumpsys activity activities > out/runtime/DIRECTIVE_MASTER_PLAN_ACTIVITIES.txt
+            grep -q 'com.directive.planner.DirectivePlannerActivity' out/runtime/DIRECTIVE_MASTER_PLAN_ACTIVITIES.txt
+            for i in 1 2 3; do
+              adb shell uiautomator dump /sdcard/DIRECTIVE_MASTER_PLAN.xml >/dev/null 2>&1 || true
+              adb pull /sdcard/DIRECTIVE_MASTER_PLAN.xml out/runtime/DIRECTIVE_MASTER_PLAN.xml >/dev/null 2>&1 || true
+              [ -s out/runtime/DIRECTIVE_MASTER_PLAN.xml ] && break
+              sleep 2
+            done
+            grep -q 'text="Default duration"' out/runtime/DIRECTIVE_MASTER_PLAN.xml
+            grep -q 'text="Bulk duration"' out/runtime/DIRECTIVE_MASTER_PLAN.xml
+            adb exec-out screencap -p > out/runtime/DIRECTIVE_MASTER_PLAN.png
+
+            # Exercise the duration chooser without changing stored data.
+            python3 - <<'PY'
+            import re,subprocess,xml.etree.ElementTree as ET
+            root=ET.parse('out/runtime/DIRECTIVE_MASTER_PLAN.xml').getroot()
+            node=next((n for n in root.iter('node') if n.attrib.get('text')=='Default duration'),None)
+            if node is None: raise SystemExit('Default duration control not found')
+            m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',node.attrib.get('bounds',''))
+            if not m: raise SystemExit('Default duration bounds unavailable')
+            x1,y1,x2,y2=map(int,m.groups())
+            subprocess.check_call(['adb','shell','input','tap',str((x1+x2)//2),str((y1+y2)//2)])
+            PY
+            sleep 2
+            adb shell uiautomator dump /sdcard/DIRECTIVE_DURATION_CHOOSER.xml >/dev/null 2>&1
+            adb pull /sdcard/DIRECTIVE_DURATION_CHOOSER.xml out/runtime/DIRECTIVE_DURATION_CHOOSER.xml >/dev/null 2>&1
+            for token in '15 min' '30 min' '45 min' '1 hr' '1.5 hr' '2 hr' 'Custom…'; do
+              grep -Fq "text=\"$token\"" out/runtime/DIRECTIVE_DURATION_CHOOSER.xml
+            done
+            adb shell input keyevent KEYCODE_BACK
+
+            PID="$(adb shell pidof "$APPLICATION_ID" | tr -d '\r' || true)"
+            test -n "$PID"
+            adb logcat -d -v threadtime > out/runtime/DIRECTIVE_MASTER_PLAN_LOGCAT.txt || true
+            python3 - <<'PY'
+            import os,sys
+            pkg=os.environ['APPLICATION_ID']
+            lines=open('out/runtime/DIRECTIVE_MASTER_PLAN_LOGCAT.txt',errors='ignore').read().splitlines()
+            hits=[]
+            for i,line in enumerate(lines):
+              if 'FATAL EXCEPTION' not in line and 'Fatal signal' not in line: continue
+              block='\n'.join(lines[max(0,i-5):min(len(lines),i+90)])
+              if pkg in block: hits.append(block)
+            open('out/runtime/DIRECTIVE_MASTER_PLAN_CRASH_CONTEXT.txt','w').write('\n\n---\n\n'.join(hits))
+            if hits: raise SystemExit('DIRECTIVE Master Plan fatal exception detected')
+            PY
+            echo 'PASS: Master Plan opens from DIRECTIVE drawer and duration chooser exposes 15/30/45/60/90/120/custom controls without fatal' \
+              | tee out/runtime/DIRECTIVE_MASTER_PLAN_RUNTIME_VERDICT.txt
+
+      - name: Upload Android 16 runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-EXEC002-android16-runtime
+          path: out/runtime/
+          if-no-files-found: error
+          retention-days: 90
+
+  final_release_and_handover:
+    needs: runtime_android16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Download signed candidate runtime evidence and static evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: DIRECTIVE-EXEC002-*
+          path: inputs
+          merge-multiple: false
+      - name: Download sealed static-complete artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.STATIC_ARTIFACT }}
+          path: inputs/static-complete
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.STATIC_RUN_ID }}
+
+      - name: Verify acceptance evidence and package timestamped release
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNED_DIR='inputs/DIRECTIVE-EXEC002-signed-candidate'
+          RUNTIME_DIR='inputs/DIRECTIVE-EXEC002-android16-runtime'
+          test -f "$SIGNED_DIR/DIRECTIVE_EXEC002_SIGNED.apk"
+          (cd "$SIGNED_DIR" && sha256sum -c DIRECTIVE_EXEC002_SIGNED.apk.sha256)
+          grep -q '^STATIC_COMPLETION=PASS$' inputs/static-complete/DIRECTIVE_EXEC002_STATIC_COMPLETION.md
+          grep -q '^PASS: DIRECTIVE clean install, offline cold launch, usable local organiser UI, process survival, relaunch and offline execution hygiene$' "$RUNTIME_DIR/DIRECTIVE_RUNTIME_VERDICT.txt"
+          grep -q '^PASS: Master Plan opens from DIRECTIVE drawer' "$RUNTIME_DIR/DIRECTIVE_MASTER_PLAN_RUNTIME_VERDICT.txt"
+          test ! -s "$RUNTIME_DIR/DIRECTIVE_CRASH_CONTEXT.txt"
+          test ! -s "$RUNTIME_DIR/DIRECTIVE_RELAUNCH_CRASH_CONTEXT.txt"
+          test ! -s "$RUNTIME_DIR/DIRECTIVE_MASTER_PLAN_CRASH_CONTEXT.txt"
+          test ! -s "$RUNTIME_DIR/DIRECTIVE_ONLINE_ERA_CONTEXT.txt"
+          test ! -s "$RUNTIME_DIR/DIRECTIVE_RELAUNCH_ONLINE_ERA_CONTEXT.txt"
+
+          TIMESTAMP="$(TZ=Europe/London date +'%d%m%Y%H%M%S')"
+          FINAL_APK="DIRECTIVE_${TIMESTAMP}.apk"
+          HANDOVER="DIRECTIVE_HANDOVER_${TIMESTAMP}.zip"
+          mkdir -p release/handover/runtime release/handover/static release/handover/signing
+          cp "$SIGNED_DIR/DIRECTIVE_EXEC002_SIGNED.apk" "release/$FINAL_APK"
+          sha256sum "release/$FINAL_APK" | tee "release/$FINAL_APK.sha256"
+          cp "release/$FINAL_APK" "release/handover/$FINAL_APK"
+          cp "release/$FINAL_APK.sha256" "release/handover/$FINAL_APK.sha256"
+          cp inputs/static-complete/DIRECTIVE_EXEC002_STATIC_COMPLETION.md release/handover/static/
+          cp inputs/static-complete/10_BALANCED_FEATURE_STATIC_MATRIX.txt release/handover/static/ 2>/dev/null || true
+          cp inputs/static-complete/DIRECTIVE_BALANCED_UPGRADE_PATCH_REPORT.json release/handover/static/ 2>/dev/null || true
+          cp "$SIGNED_DIR/DIRECTIVE_APKSIGNER_VERIFY.txt" release/handover/signing/
+          cp "$SIGNED_DIR/DIRECTIVE_SIGNING_CERT.txt" release/handover/signing/
+          cp "$SIGNED_DIR/DIRECTIVE_AAPT_BADGING.txt" release/handover/signing/
+          cp "$SIGNED_DIR/DIRECTIVE_AAPT_PERMISSIONS.txt" release/handover/signing/
+          cp "$SIGNED_DIR/DIRECTIVE_NATIVE_ABIS.txt" release/handover/signing/
+          cp -a "$RUNTIME_DIR"/. release/handover/runtime/
+          cat > release/handover/DIRECTIVE_EXEC002_FINAL_COMPLETION.md <<EOF
+          # DIRECTIVE — EXEC002 Final Completion
+
+          - Authoritative decoded source SHA-256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+          - Sealed static-complete source run: $STATIC_RUN_ID
+          - Sealed unsigned static candidate SHA-256: $STATIC_CANDIDATE_SHA256
+          - Current release workflow run: $GITHUB_RUN_ID
+          - Signed release APK: $FINAL_APK
+          - Static completion: PASS
+          - Signing / 16 KiB alignment / certificate verification: PASS
+          - Package identity / minSdk 21 / targetSdk 37: PASS
+          - Hard offline permission boundary: PASS
+          - Android 16 translated-ARM64 clean-install cold-launch/relaunch: PASS
+          - Main organiser UI / process survival / obsolete-online execution hygiene: PASS
+          - Master Plan drawer navigation: PASS
+          - Duration chooser presets 15/30/45/60/90/120 + custom: PASS
+          - Automated Android 16 acceptance: COMPLETE
+          - Physical Galaxy S23+ observation of these exact bytes: NOT EXECUTED; distinct external acceptance observation
+
+          EXEC002_TECHNICAL_COMPLETION=PASS
+          APK_READY=YES
+          EOF
+          cp release/handover/DIRECTIVE_EXEC002_FINAL_COMPLETION.md release/
+          (cd release/handover && zip -qr "../$HANDOVER" .)
+          sha256sum "release/$HANDOVER" | tee "release/$HANDOVER.sha256"
+          printf '%s\n' "$FINAL_APK" > release/FINAL_APK_NAME.txt
+          printf '%s\n' "$HANDOVER" > release/HANDOVER_NAME.txt
+          cat release/handover/DIRECTIVE_EXEC002_FINAL_COMPLETION.md
+
+      - name: Persist final release and handover to private DIRECTIVE release
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FINAL_APK="$(cat release/FINAL_APK_NAME.txt)"
+          HANDOVER="$(cat release/HANDOVER_NAME.txt)"
+          gh release view "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" >/dev/null 2>&1 \
+            || gh release create "$PRIVATE_RELEASE_TAG" --repo "$SOURCE_REPO" --title 'DIRECTIVE EXEC002 Latest' --notes 'Latest EXEC002 technically accepted release.'
+          gh release upload "$PRIVATE_RELEASE_TAG" \
+            "release/$FINAL_APK" "release/$FINAL_APK.sha256" \
+            "release/$HANDOVER" "release/$HANDOVER.sha256" \
+            release/DIRECTIVE_EXEC002_FINAL_COMPLETION.md \
+            --repo "$SOURCE_REPO" --clobber
+
+      - name: Upload final release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-EXEC002-release-complete
+          path: release/
+          if-no-files-found: error
+          retention-days: 90
