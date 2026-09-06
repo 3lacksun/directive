@@ -1,0 +1,67 @@
+name: Extract DIRECTIVE UI Hook Targets
+
+on:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/extract-directive-ui-hook-targets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+      - name: Download and scan
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted hooks/files
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SRC_ZIP="$(find input -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          echo "$SOURCE_SHA256  $SRC_ZIP" | sha256sum -c -
+          unzip -q "$SRC_ZIP" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -1)"
+          export SRC_ROOT
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, json, shutil
+          root=Path(os.environ['SRC_ROOT']); out=Path('hooks'); files=out/'files'
+          needles=['sign_in_up_btn','user_info_menu_head_layout','layout_add_project','iv_manage_project','prefkey_rate','subscribe_calendar','fragment_subscribe_calendar','calendar_subscribe','subscription_calendar','Subscribe']
+          hits={n:[] for n in needles}
+          copied=[]
+          for p in root.rglob('*'):
+            if not p.is_file() or p.suffix not in {'.smali','.xml'}: continue
+            try: txt=p.read_text('utf-8',errors='ignore')
+            except: continue
+            matched=[]
+            for n in needles:
+              if n in txt: hits[n].append(str(p.relative_to(root))); matched.append(n)
+            if matched and p.stat().st_size<900000:
+              rp=p.relative_to(root); dest=files/rp; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(p,dest); copied.append(str(rp))
+          (out/'hits.json').write_text(json.dumps(hits,indent=2))
+          (out/'copied.txt').write_text('\n'.join(sorted(set(copied))))
+          print({k:len(v) for k,v in hits.items()})
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-ui-hook-targets
+          path: hooks/
+          retention-days: 30
+          compression-level: 0
