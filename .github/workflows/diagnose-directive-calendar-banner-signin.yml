@@ -1,0 +1,85 @@
+name: Diagnose DIRECTIVE Calendar Banner and Sign-in
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/diagnose-directive-calendar-banner-signin.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+      - name: Download authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted out/files
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SRCZIP="$(find input -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SRCZIP"
+          echo "$SOURCE_SHA256  $SRCZIP" | sha256sum -c -
+          unzip -q "$SRCZIP" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+      - name: Locate banner and sign-in code paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '=== string-name references ==='
+            grep -RIn -E 'calendar_banner_btn_subscribe|calendar_banner_message|sign_in_up_btn' "$ROOT" || true
+            echo '=== numeric calendar-banner string references ==='
+            grep -RIn -E '0x7f130233|0x7f130234' "$ROOT" || true
+            echo '=== sign-in field/controller references ==='
+            grep -RIn -E 'Lc9/c;->h:Landroid/view/View;|LoginMainActivity|sign_in_up_btn' "$ROOT" | head -n 500 || true
+          } > out/grep.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, shutil
+          root=Path(__import__('os').environ['ROOT'])
+          text=Path('out/grep.txt').read_text(errors='ignore')
+          paths=[]
+          for line in text.splitlines():
+              m=re.match(r'(.+?):\d+:',line)
+              if m:
+                  p=Path(m.group(1))
+                  if p.is_file() and p not in paths: paths.append(p)
+          # Always include known controller + resources.
+          for rel in [
+              'smali_classes2/com/ticktick/task/activity/fragment/slidemenu/TickTickSlideMenuFragment.smali',
+              'smali_classes3/c9/c.smali','res/layout/menu_head_item.xml','res/values/strings.xml','res/values/ids.xml','res/values/public.xml']:
+              p=root/rel
+              if p.is_file() and p not in paths: paths.append(p)
+          for p in paths[:100]:
+              rel=p.relative_to(root)
+              dest=Path('out/files')/rel
+              dest.parent.mkdir(parents=True,exist_ok=True)
+              shutil.copy2(p,dest)
+          Path('out/copied.txt').write_text('\n'.join(str(p.relative_to(root)) for p in paths[:100])+'\n')
+          PY
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-calendar-banner-signin-diagnostic
+          path: out
+          if-no-files-found: error
