@@ -1,0 +1,111 @@
+name: Extract DIRECTIVE Balanced Upgrade Targets
+
+on:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/extract-directive-balanced-upgrade-targets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+      - name: Download source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted targets
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SRC_ZIP="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          echo "$SOURCE_SHA256  $SRC_ZIP" | sha256sum -c -
+          unzip -q "$SRC_ZIP" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$SRC_ROOT"
+          echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
+      - name: Copy exact implementation targets and caller maps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re,shutil,json
+          root=Path(os.environ['SRC_ROOT']); out=Path('targets'); files=out/'files'; files.mkdir(parents=True,exist_ok=True)
+          exact_names={
+            'Task2.smali','TaskExtraData.smali','TaskExtraDataService.smali','TaskExtraDataDao.smali','DaoSession.smali','DaoMaster.smali',
+            'TaskEstimationDurationDialog.smali','TaskEstimationDurationDialog$Companion.smali','TaskViewFragment.smali',
+            'TaskDefaultParam.smali','TaskDefaultsPreferenceFragment.smali','TaskDefaultTimeDurationFragment.smali','TaskDefaultTimeDurationFragment$Companion.smali',
+            'TaskDefaultTimeDurationCustomFragment.smali','TaskService.smali','CalendarViewTaskService.smali','CalendarTaskService.smali',
+            'TaskQuickAddActivity.smali','TaskQuickAddFragment.smali','QuickAddTaskActivity.smali','QuickAddTaskFragment.smali',
+            'BaseListChildFragment$1.smali','TaskDetailDragHandler.smali','TaskHelper.smali','PomodoroSummaryService.smali',
+            'Constants$ArrangeTaskType.smali','TimelineArrangeListEvent.smali','TaskDefaultService.smali'
+          }
+          copied=[]
+          for p in root.rglob('*'):
+            if p.is_file() and p.name in exact_names:
+              rp=p.relative_to(root); dest=files/rp; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(p,dest); copied.append(str(rp))
+          # Copy all task/timeline/arrange classes that directly mention estimatedDuration / estimation dialog / ArrangeTaskType.
+          needles=['TaskExtraDataService;->saveOrUpdate','TaskExtraData;->setEstimatedDuration','TaskExtraData;->getEstimatedDuration','TaskEstimationDurationDialog$Companion;->show','Constants$ArrangeTaskType','TimelineArrangeListEvent','getDefaultTimeDuration','setDefaultTimeDuration']
+          callers={n:[] for n in needles}
+          for p in root.rglob('*.smali'):
+            try: txt=p.read_text('utf-8',errors='ignore')
+            except: continue
+            hit=False
+            for n in needles:
+              if n in txt:
+                callers[n].append(str(p.relative_to(root))); hit=True
+            if hit and p.stat().st_size<800000:
+              rp=p.relative_to(root); dest=files/rp; dest.parent.mkdir(parents=True,exist_ok=True)
+              if not dest.exists(): shutil.copy2(p,dest); copied.append(str(rp))
+          (out/'callers.json').write_text(json.dumps(callers,indent=2))
+          (out/'copied.txt').write_text('\n'.join(sorted(set(copied))))
+
+          # Database/table inventory and application database initialization references.
+          db=[]
+          rx=re.compile(r'(CREATE TABLE|TASK_EXTRA_DATA|TASKS2|Tasks2|DaoMaster|SQLiteOpenHelper|openOrCreateDatabase|getDatabasePath|\.db\"|databaseName)',re.I)
+          for p in root.rglob('*.smali'):
+            try: lines=p.read_text('utf-8',errors='ignore').splitlines()
+            except: continue
+            hits=[(i+1,l[:1000]) for i,l in enumerate(lines) if rx.search(l)]
+            if hits: db.append({'path':str(p.relative_to(root)),'hits':hits[:250]})
+          (out/'database_inventory.json').write_text(json.dumps(db,indent=2))
+
+          # Relevant resource IDs and layouts/preferences.
+          resrx=re.compile(r'duration|estimate|schedule|timeline|arrange|calendar|task_default|quick_add|weekly|week_plan|workload|overload|pin|lock',re.I)
+          for p in (root/'res').rglob('*.xml'):
+            try: txt=p.read_text('utf-8',errors='ignore')
+            except: continue
+            if resrx.search(p.name) or resrx.search(txt):
+              if p.stat().st_size<300000:
+                rp=p.relative_to(root); dest=files/rp; dest.parent.mkdir(parents=True,exist_ok=True)
+                if not dest.exists(): shutil.copy2(p,dest)
+          for f in ['AndroidManifest.xml','apktool.yml','res/values/strings.xml','res/values/public.xml','res/values/ids.xml']:
+            p=root/f
+            if p.exists():
+              dest=files/f; dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(p,dest)
+          print('copied smali',len(set(copied)),'caller groups', {k:len(v) for k,v in callers.items()}, 'db files',len(db))
+          PY
+      - name: Upload targets
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-balanced-upgrade-implementation-targets
+          path: targets/
+          retention-days: 30
+          compression-level: 0
