@@ -1,0 +1,40 @@
+name: TurnCall ORC002 Build Tools 35
+
+on:
+  push:
+    branches: [ turncall-orc002-bt35-06092026 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+          accept-android-sdk-licenses: true
+      - name: Install Build Tools 35.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "build-tools;35.0.0"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          mkdir -p "$GITHUB_WORKSPACE/bt35/build-tools"
+          cp -a "$ANDROID_HOME/build-tools/35.0.0" "$GITHUB_WORKSPACE/bt35/build-tools/"
+          find "$GITHUB_WORKSPACE/bt35" -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > "$GITHUB_WORKSPACE/bt35/SHA256SUMS.txt"
+          tar --zstd -cf "$GITHUB_WORKSPACE/turncall-orc002-build-tools-35.0.0.tar.zst" -C "$GITHUB_WORKSPACE" bt35
+          sha256sum "$GITHUB_WORKSPACE/turncall-orc002-build-tools-35.0.0.tar.zst" > "$GITHUB_WORKSPACE/turncall-orc002-build-tools-35.0.0.tar.zst.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turncall-orc002-build-tools-35.0.0
+          path: |
+            turncall-orc002-build-tools-35.0.0.tar.zst
+            turncall-orc002-build-tools-35.0.0.tar.zst.sha256
+          compression-level: 0
+          retention-days: 7
