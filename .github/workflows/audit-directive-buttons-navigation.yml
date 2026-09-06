@@ -1,0 +1,363 @@
+name: Audit DIRECTIVE Buttons and Navigation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/audit-directive-buttons-navigation.yml'
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: 3lacksun/-directive-v2-offline
+  PRIVATE_RELEASE_TAG: directive-ci-build-latest
+  FINAL_APK: DIRECTIVE_06092026093815.apk
+  FINAL_APK_SHA256: 334648ae61cb867849a0a248d885e4d4607794f915662b3803c66ca72325d811
+  APP_ID: com.ticktick.task
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
+
+      - name: Download exact sealed APK
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit-input audit-output
+          gh release download "$PRIVATE_RELEASE_TAG" --repo "$PRIVATE_REPO" --pattern "$FINAL_APK" --dir audit-input
+          ACTUAL="$(sha256sum "audit-input/$FINAL_APK" | awk '{print $1}')"
+          test "$ACTUAL" = "$FINAL_APK_SHA256"
+          echo "APK_PATH=audit-input/$FINAL_APK" >> "$GITHUB_ENV"
+
+      - name: Create runtime button/navigation auditor
+        shell: bash
+        run: |
+          cat > audit.py <<'PY'
+          import os, re, json, time, hashlib, subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          PKG = os.environ["APP_ID"]
+          OUT = Path("audit-output")
+          OUT.mkdir(exist_ok=True)
+          RESULTS = []
+          BLOCKED = [
+              "sign in", "log in", "login", "continue with google", "google sign",
+              "create account", "sync", "cloud", "premium", "upgrade", "subscribe",
+              "billing", "web login", "oauth"
+          ]
+          DANGEROUS = ["delete", "erase", "reset", "remove account", "clear all"]
+
+          def run(cmd, check=False, capture=True):
+              p = subprocess.run(cmd, shell=True, text=True,
+                                 stdout=subprocess.PIPE if capture else None,
+                                 stderr=subprocess.STDOUT if capture else None)
+              if check and p.returncode != 0:
+                  raise RuntimeError(f"command failed {p.returncode}: {cmd}\n{p.stdout}")
+              return (p.stdout or "").strip(), p.returncode
+
+          def adb(args, check=False):
+              return run(f"adb {args}", check=check)
+
+          def launch(clear=True):
+              if clear:
+                  adb(f"shell pm clear {PKG}")
+              adb(f"shell am force-stop {PKG}")
+              adb("shell svc wifi disable")
+              adb("shell svc data disable")
+              adb(f"shell monkey -p {PKG} -c android.intent.category.LAUNCHER 1")
+              time.sleep(2.2)
+
+          def bounds_center(bounds):
+              m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds or "")
+              if not m: return None
+              x1,y1,x2,y2 = map(int,m.groups())
+              if x2 <= x1 or y2 <= y1: return None
+              return ((x1+x2)//2, (y1+y2)//2)
+
+          def resumed_activity():
+              out,_ = adb("shell dumpsys activity activities")
+              for line in out.splitlines():
+                  if "mResumedActivity" in line or "topResumedActivity" in line:
+                      return line.strip()
+              return ""
+
+          def pid():
+              out,_ = adb(f"shell pidof {PKG}")
+              return out.strip()
+
+          def dump(label, screenshot=True):
+              safe = re.sub(r"[^A-Za-z0-9_.-]+","_",label)
+              remote = f"/sdcard/{safe}.xml"
+              adb(f"shell uiautomator dump {remote}")
+              adb(f"pull {remote} {OUT}/{safe}.xml")
+              if screenshot:
+                  adb(f"exec-out screencap -p > {OUT}/{safe}.png")
+              xml = (OUT/f"{safe}.xml").read_text(errors="replace")
+              activity = resumed_activity()
+              p = pid()
+              try:
+                  root = ET.fromstring(xml)
+              except Exception:
+                  root = None
+              text_parts, packages, clickables = [], set(), []
+              if root is not None:
+                  for n in root.iter("node"):
+                      a = n.attrib
+                      if a.get("text"): text_parts.append(a["text"])
+                      if a.get("content-desc"): text_parts.append(a["content-desc"])
+                      if a.get("package"): packages.add(a["package"])
+                      if a.get("clickable") == "true" and a.get("enabled") == "true":
+                          c = bounds_center(a.get("bounds",""))
+                          if c:
+                              clickables.append({
+                                  "text": a.get("text",""),
+                                  "desc": a.get("content-desc",""),
+                                  "id": a.get("resource-id",""),
+                                  "class": a.get("class",""),
+                                  "bounds": a.get("bounds",""),
+                                  "center": list(c),
+                                  "long_clickable": a.get("long-clickable") == "true",
+                                  "checked": a.get("checked",""),
+                                  "selected": a.get("selected","")
+                              })
+              visible = " | ".join(text_parts)
+              return {
+                  "label": label, "file": safe, "xml": xml,
+                  "hash": hashlib.sha256(xml.encode()).hexdigest(),
+                  "activity": activity, "pid": p, "packages": sorted(packages),
+                  "visible_text": visible, "clickables": clickables
+              }
+
+          def tap(x,y):
+              adb(f"shell input tap {int(x)} {int(y)}")
+              time.sleep(1.4)
+
+          def back():
+              adb("shell input keyevent 4")
+              time.sleep(1.0)
+
+          def prepare_state(state):
+              launch(clear=True)
+              if state == "main":
+                  return
+              if state == "calendar":
+                  tap(540,2194)
+              elif state == "settings":
+                  tap(900,2194)
+              elif state == "settings_scroll":
+                  tap(900,2194); adb("shell input swipe 540 1800 540 650 500"); time.sleep(1)
+              elif state == "drawer":
+                  tap(77,212)
+              elif state == "overflow":
+                  tap(1008,212)
+              elif state == "add_task":
+                  tap(948,2004)
+              else:
+                  raise ValueError(state)
+
+          def classify(before, after, node=None):
+              text = after["visible_text"].lower()
+              blocked = sorted({b for b in BLOCKED if b in text})
+              external = [p for p in after["packages"] if p and p != PKG]
+              alive = bool(after["pid"])
+              changed = before["hash"] != after["hash"] or before["activity"] != after["activity"]
+              status = "TRANSITION" if changed else "NO_VISIBLE_RESPONSE"
+              if external: status = "EXTERNAL_OR_SYSTEM_UI"
+              if not alive: status = "APP_PROCESS_GONE"
+              if blocked: status = "LEGACY_OR_ONLINE_UI_EXPOSED"
+              return {
+                  "status": status, "changed": changed, "blocked_terms": blocked,
+                  "external_packages": external, "process_alive": alive,
+                  "activity_before": before["activity"], "activity_after": after["activity"]
+              }
+
+          def probe_named(name, state, point):
+              prepare_state(state)
+              before = dump(f"{name}_before")
+              tap(*point)
+              after = dump(f"{name}_after")
+              rec = {"probe": name, "state": state, "point": list(point),
+                     "before_visible": before["visible_text"],
+                     "after_visible": after["visible_text"]}
+              rec.update(classify(before,after))
+              RESULTS.append(rec)
+
+          fixed = [
+              ("bottom_tasks","main",(180,2194)),
+              ("bottom_calendar","main",(540,2194)),
+              ("bottom_settings","main",(900,2194)),
+              ("hamburger_drawer","main",(77,212)),
+              ("overflow_more","main",(1008,212)),
+              ("add_task_fab","main",(948,2004)),
+              ("inbox_tip_close","main",(970,383)),
+          ]
+          for args in fixed:
+              probe_named(*args)
+
+          for state in ["main","calendar","settings","settings_scroll","drawer","overflow","add_task"]:
+              prepare_state(state)
+              baseline = dump(f"inventory_{state}")
+              inventory = {
+                  "surface": state, "activity": baseline["activity"],
+                  "visible_text": baseline["visible_text"],
+                  "clickables": baseline["clickables"]
+              }
+              (OUT/f"inventory_{state}.json").write_text(json.dumps(inventory,indent=2))
+              seen = set()
+              for idx,node in enumerate(baseline["clickables"][:40]):
+                  key = (node["id"],node["text"],node["desc"],node["bounds"])
+                  if key in seen: continue
+                  seen.add(key)
+                  label_text = " ".join([node["text"], node["desc"], node["id"]]).lower()
+                  if any(d in label_text for d in DANGEROUS):
+                      RESULTS.append({
+                          "probe": f"{state}_clickable_{idx}",
+                          "state": state, "node": node, "status": "SKIPPED_DESTRUCTIVE",
+                          "changed": False, "blocked_terms": [], "external_packages": [],
+                          "process_alive": True, "activity_before": baseline["activity"],
+                          "activity_after": baseline["activity"]
+                      })
+                      continue
+                  prepare_state(state)
+                  before = dump(f"{state}_{idx}_before", screenshot=False)
+                  candidates = before["clickables"]
+                  match = None
+                  for c in candidates:
+                      if node["id"] and c["id"] == node["id"] and c["bounds"] == node["bounds"]:
+                          match = c; break
+                  if match is None:
+                      for c in candidates:
+                          if (node["text"] or node["desc"]) and c["text"] == node["text"] and c["desc"] == node["desc"]:
+                              match = c; break
+                  if match is None:
+                      match = node
+                  tap(*match["center"])
+                  after = dump(f"{state}_{idx}_after", screenshot=False)
+                  rec = {"probe": f"{state}_clickable_{idx}", "state": state, "node": node,
+                         "before_visible": before["visible_text"], "after_visible": after["visible_text"]}
+                  rec.update(classify(before,after,node))
+                  RESULTS.append(rec)
+
+          for state in ["calendar","settings","drawer","overflow","add_task"]:
+              prepare_state(state)
+              before = dump(f"back_{state}_before", screenshot=False)
+              back()
+              after = dump(f"back_{state}_after", screenshot=False)
+              rec = {"probe": f"back_from_{state}", "state": state}
+              rec.update(classify(before,after))
+              RESULTS.append(rec)
+
+          logcat,_ = adb("logcat -d")
+          fatal = []
+          lines = logcat.splitlines()
+          for i,line in enumerate(lines):
+              if "FATAL EXCEPTION" in line:
+                  block = "\n".join(lines[i:i+40])
+                  if PKG in block:
+                      fatal.append(block)
+          (OUT/"fatal_context.txt").write_text("\n\n".join(fatal))
+          (OUT/"results.json").write_text(json.dumps(RESULTS,indent=2))
+
+          defects = []
+          no_response = []
+          for r in RESULTS:
+              if r["status"] in ("LEGACY_OR_ONLINE_UI_EXPOSED","APP_PROCESS_GONE"):
+                  defects.append(r)
+              elif r["status"] == "NO_VISIBLE_RESPONSE":
+                  no_response.append(r)
+          if fatal:
+              defects.append({"probe":"fatal_exception","status":"APP_FATAL","blocks":fatal})
+
+          md = []
+          md.append("# DIRECTIVE Buttons & Navigation Runtime Audit")
+          md.append("")
+          md.append(f"- APK: `{os.environ.get('FINAL_APK','')}`")
+          md.append(f"- SHA-256: `{os.environ.get('FINAL_APK_SHA256','')}`")
+          md.append("- Platform: Android 16 / API 36 emulator, network disabled")
+          md.append(f"- Probes executed: **{len(RESULTS)}**")
+          md.append(f"- High-confidence defects: **{len(defects)}**")
+          md.append(f"- No-visible-response controls: **{len(no_response)}**")
+          md.append("")
+          md.append("## Primary controls")
+          md.append("")
+          md.append("| Probe | Result | Activity after | Blocked/legacy terms |")
+          md.append("|---|---|---|---|")
+          for r in RESULTS[:len(fixed)]:
+              md.append(f"| {r['probe']} | {r['status']} | `{r['activity_after']}` | {', '.join(r.get('blocked_terms',[])) or '—'} |")
+          md.append("")
+          md.append("## Findings requiring review")
+          md.append("")
+          if not defects and not no_response:
+              md.append("No runtime defects or dead controls were detected in the exercised surfaces.")
+          else:
+              for r in defects:
+                  md.append(f"- **DEFECT** `{r.get('probe')}` — {r.get('status')}; blocked terms: {', '.join(r.get('blocked_terms',[])) or '—'}")
+              for r in no_response:
+                  node = r.get("node",{})
+                  ident = node.get("text") or node.get("desc") or node.get("id") or node.get("bounds","")
+                  md.append(f"- **NO VISIBLE RESPONSE** `{r.get('probe')}` — `{ident}`")
+          md.append("")
+          md.append("## Full control results")
+          md.append("")
+          md.append("| Surface | Control | Result | Activity transition |")
+          md.append("|---|---|---|---|")
+          for r in RESULTS:
+              node = r.get("node",{})
+              ident = node.get("text") or node.get("desc") or node.get("id") or r.get("probe")
+              a1 = r.get("activity_before","")
+              a2 = r.get("activity_after","")
+              md.append(f"| {r.get('state','')} | {str(ident).replace('|','/')} | {r.get('status')} | `{a1}` → `{a2}` |")
+          (OUT/"DIRECTIVE_BUTTON_NAVIGATION_AUDIT.md").write_text("\n".join(md))
+          print("\n".join(md[:80]))
+          PY
+
+      - name: Android 16 button/navigation audit
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          cores: 2
+          ram-size: 3072M
+          emulator-boot-timeout: 1200
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: |
+            adb shell getprop ro.product.cpu.abilist
+            adb shell getprop ro.dalvik.vm.native.bridge
+            adb uninstall "$APP_ID" || true
+            adb install --abi arm64-v8a "$APK_PATH"
+            adb shell svc wifi disable
+            adb shell svc data disable
+            python3 audit.py
+
+      - name: Upload button/navigation audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-button-navigation-audit
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+          path: audit-output/
