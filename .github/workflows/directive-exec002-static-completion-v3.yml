@@ -1,0 +1,264 @@
+name: DIRECTIVE EXEC002 Static Completion v3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-exec002-static-completion-v3.yml'
+      - 'ci/DIRECTIVE_EXEC002_STATIC_V3_TRIGGER/**'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+  PLANNER_SOURCE_SHA256: 23de17f28c0f2fa13f8a8cbc1d0d20ca6495003136e35d1845a681f8a29ccce8
+  APKTOOL_VERSION: 2.12.1
+  APKTOOL_SHA256: 66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
+  BUILD_TOOLS_VERSION: 35.0.0
+  ANDROID_PLATFORM: 35
+  APPLICATION_ID: com.ticktick.task
+
+jobs:
+  static_completion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Require private DIRECTIVE token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download and lock authoritative inputs
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted private-support out extension-src extension-classes extension-dex redecoded
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE_DOWNLOADED="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE_DOWNLOADED"
+          mv "$SOURCE_DOWNLOADED" input/DIRECTIVE_AUTHORITATIVE_SOURCE.zip
+          echo "$SOURCE_SHA256  input/DIRECTIVE_AUTHORITATIVE_SOURCE.zip" | sha256sum -c - | tee out/01_SOURCE_LOCK.txt
+          unzip -q input/DIRECTIVE_AUTHORITATIVE_SOURCE.zip -d extracted
+          FOUND_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$FOUND_ROOT"
+          mv "$FOUND_ROOT" extracted/DIRECTIVE_SOURCE
+          echo "SRC_ROOT=extracted/DIRECTIVE_SOURCE" >> "$GITHUB_ENV"
+
+          for path in \
+            support/prepare_directive_package.py \
+            support/prepare_directive_package_base.py \
+            support/apply_directive_offline_runtime_cleanup.py \
+            support/apply_directive_balanced_upgrade.py \
+            support/directive_balanced_upgrade_sources.tgz.b64; do
+            name="$(basename "$path")"
+            gh api "repos/$SOURCE_REPO/contents/$path?ref=main" --jq .content \
+              | tr -d '\n' | base64 --decode > "private-support/$name"
+          done
+          base64 --decode private-support/directive_balanced_upgrade_sources.tgz.b64 > private-support/directive_balanced_upgrade_sources.tgz
+          echo "$PLANNER_SOURCE_SHA256  private-support/directive_balanced_upgrade_sources.tgz" | sha256sum -c - | tee out/02_PLANNER_SOURCE_LOCK.txt
+          tar -xzf private-support/directive_balanced_upgrade_sources.tgz -C extension-src
+          find extension-src -type f -name '*.java' -print | sort | tee out/03_EXTENSION_SOURCE_FILES.txt
+          test "$(wc -l < out/03_EXTENSION_SOURCE_FILES.txt)" -ge 3
+          python3 -m py_compile private-support/prepare_directive_package.py private-support/apply_directive_balanced_upgrade.py
+
+      - name: Apply complete DIRECTIVE source preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 private-support/prepare_directive_package.py "$SRC_ROOT" | tee out/04_PACKAGE_PREPARATION.txt
+          cp "$SRC_ROOT/DIRECTIVE_PACKAGE_PREPARATION_REPORT.json" out/
+          cp "$SRC_ROOT/DIRECTIVE_BALANCED_UPGRADE_PATCH_REPORT.json" out/
+          python3 - <<'PY' | tee out/05_PATCH_ASSERTIONS.txt
+          import json
+          base=json.load(open('out/DIRECTIVE_PACKAGE_PREPARATION_REPORT.json'))
+          bal=json.load(open('out/DIRECTIVE_BALANCED_UPGRADE_PATCH_REPORT.json'))
+          assert base['verification']['status']=='PASS', base
+          assert bal['status']=='PASS', bal
+          required=['planner_activity_registered','duration_wording_localised','legacy_add_project_repurposed','legacy_manage_project_hidden','any_task_duration_menu','native_duration_mode_forced','new_task_default_duration_hook','about_missing_rate_crash_removed','signin_head_default_hidden','calendar_banner_opens_local_planner','local_mode_signin_route_suppressed']
+          for k in required: assert bal['verification'].get(k) is True, (k,bal)
+          assert bal.get('network_permissions_added') is False
+          print('PASS: decoded source preparation and Balanced Upgrade hooks')
+          PY
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android static toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "build-tools;$BUILD_TOOLS_VERSION" "platforms;android-$ANDROID_PLATFORM" platform-tools
+          test -f "$ANDROID_HOME/platforms/android-$ANDROID_PLATFORM/android.jar"
+          test -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/d8"
+          test -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt"
+
+      - name: Compile and dex local-only Master Plan extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_JAR="$ANDROID_HOME/platforms/android-$ANDROID_PLATFORM/android.jar"
+          javac -encoding UTF-8 --release 8 -classpath "$ANDROID_JAR" \
+            -d extension-classes $(cat out/03_EXTENSION_SOURCE_FILES.txt) \
+            2>&1 | tee out/06_JAVAC.txt
+          find extension-classes -type f -name '*.class' -print | sort | tee out/07_EXTENSION_CLASSES.txt
+          test -s out/07_EXTENSION_CLASSES.txt
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/d8" \
+            --lib "$ANDROID_JAR" --min-api 21 --output extension-dex \
+            $(cat out/07_EXTENSION_CLASSES.txt) 2>&1 | tee out/08_D8.txt
+          test -s extension-dex/classes.dex
+          sha256sum extension-dex/classes.dex | tee out/09_EXTENSION_DEX.sha256
+
+      - name: Verify Balanced Upgrade static feature contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee out/10_BALANCED_FEATURE_STATIC_MATRIX.txt
+          from pathlib import Path
+          src='\n'.join(p.read_text(errors='ignore') for p in Path('extension-src').rglob('*.java'))
+          req={
+            'any-task duration persistence':['getDurationMinutes','setDurationMinutes','getEstimatedDuration','setEstimatedDuration','TaskExtraDataService','saveOrUpdate','duration_','recordDurationHistory'],
+            'presets/default':['15,30,45,60,90,120','Default duration','setDefaultDuration','applyDefaultDurationToTask'],
+            'bulk duration':['Bulk duration','bulkDuration'],
+            'lock/pin':['Lock planned sessions','locked_','isLocked'],
+            'local duration suggestions':['recordDurationHistory','suggestedDuration','suggestionKey','suggest_','default_duration'],
+            'split sessions':['Add work session','sessions_','remaining'],
+            'recurring availability':['Recurring availability windows','avail_enabled_','avail_start_','avail_end_'],
+            'replan preview undo':['Replan Remaining Day','applyReplan','Undo replan','undoReplan'],
+            'capacity risk':['On track','Tight','At risk','Cannot fit'],
+            'weekly strategy':['Weekly Strategy','capacity ','committed ','OVERLOADED'],
+            'app-private persistence':['SharedPreferences','MODE_PRIVATE'],
+          }
+          bad=[]
+          for name,tokens in req.items():
+            missing=[t for t in tokens if t not in src]
+            ok=not missing
+            print(('PASS' if ok else 'FAIL')+' | '+name + (' | missing='+str(missing) if missing else ''))
+            if missing: bad.append((name,missing))
+          forbidden=['java.net.','HttpURLConnection','okhttp','retrofit','android.webkit.WebView','URLConnection','Socket(']
+          hits=[x for x in forbidden if x in src]
+          print(('PASS' if not hits else 'FAIL')+' | extension network API absence | '+str(hits))
+          if bad or hits: raise SystemExit(1)
+          PY
+
+      - name: Build complete decoded application with Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o apktool.jar
+          echo "$APKTOOL_SHA256  apktool.jar" | sha256sum -c - | tee out/11_APKTOOL_LOCK.txt
+          java -Xmx6g -jar apktool.jar b "$SRC_ROOT" -o out/DIRECTIVE_STATIC_BASE.apk 2>&1 | tee out/12_APKTOOL_BUILD.txt
+          test -s out/DIRECTIVE_STATIC_BASE.apk
+          unzip -t out/DIRECTIVE_STATIC_BASE.apk > out/13_BASE_ZIP_TEST.txt
+
+      - name: Merge extension as an additional dex
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp out/DIRECTIVE_STATIC_BASE.apk out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk
+          mapfile -t dexes < <(unzip -Z1 out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | grep -E '^classes([0-9]+)?\.dex$' | sort -V)
+          printf '%s\n' "${dexes[@]}" | tee out/14_BASE_DEX_INVENTORY.txt
+          max=1
+          for d in "${dexes[@]}"; do
+            if [[ "$d" == classes.dex ]]; then n=1; else n="${d#classes}"; n="${n%.dex}"; fi
+            (( n > max )) && max=$n
+          done
+          name="classes$((max+1)).dex"
+          cp extension-dex/classes.dex "$name"
+          zip -q out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk "$name"
+          rm "$name"
+          echo "$name" | tee out/15_EXTENSION_DEX_NAME.txt
+          unzip -t out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk > out/16_CANDIDATE_ZIP_TEST.txt
+          unzip -Z1 out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | grep -Fx "$(cat out/15_EXTENSION_DEX_NAME.txt)"
+          sha256sum out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | tee out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk.sha256
+
+      - name: Verify binary identity SDK planner and offline boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/aapt"
+          "$AAPT" dump badging out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | tee out/17_AAPT_BADGING.txt
+          "$AAPT" dump permissions out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk | tee out/18_AAPT_PERMISSIONS.txt
+          "$AAPT" dump xmltree out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk AndroidManifest.xml | tee out/19_AAPT_MANIFEST.txt
+          grep -q "package: name='$APPLICATION_ID'" out/17_AAPT_BADGING.txt
+          grep -q "sdkVersion:'21'" out/17_AAPT_BADGING.txt
+          grep -q "targetSdkVersion:'37'" out/17_AAPT_BADGING.txt
+          grep -q "application-label:'DIRECTIVE'" out/17_AAPT_BADGING.txt
+          grep -q 'com.directive.planner.DirectivePlannerActivity' out/19_AAPT_MANIFEST.txt
+          if grep -Eqi 'android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/18_AAPT_PERMISSIONS.txt; then
+            echo 'FAIL: forbidden network permission present' >&2
+            exit 1
+          fi
+          echo 'PASS: identity, SDK, Master Plan registration and hard offline boundary' | tee out/20_STATIC_PACKAGE_GATE.txt
+
+      - name: Clean re-decode and independently reverify changed surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -Xmx6g -jar apktool.jar d -f out/DIRECTIVE_EXEC002_STATIC_CANDIDATE.apk -o redecoded/DIRECTIVE 2>&1 | tee out/21_CLEAN_REDECODE.txt
+          grep -q 'com.directive.planner.DirectivePlannerActivity' redecoded/DIRECTIVE/AndroidManifest.xml
+          grep -Rqs 'applyDefaultDurationToTask' redecoded/DIRECTIVE/smali*
+          grep -Rqs 'launchForTask' redecoded/DIRECTIVE/smali*
+          grep -Rqs 'recordDurationHistory' redecoded/DIRECTIVE/smali*
+          grep -Rqs 'suggestedDuration' redecoded/DIRECTIVE/smali*
+          ! grep -q 'prefkey_rate' redecoded/DIRECTIVE/smali_classes3/com/ticktick/task/activity/preference/AboutPreferencesFragment.smali
+          grep -q 'Master Plan' redecoded/DIRECTIVE/res/values/strings.xml
+          grep -q 'Task Duration' redecoded/DIRECTIVE/res/values/strings.xml
+          python3 - <<'PY' | tee out/22_REDECODED_OFFLINE_RECHECK.txt
+          from pathlib import Path
+          m=Path('redecoded/DIRECTIVE/AndroidManifest.xml').read_text(errors='ignore')
+          forbidden=['android.permission.INTERNET','android.permission.ACCESS_NETWORK_STATE','android.permission.ACCESS_WIFI_STATE','android.permission.CHANGE_NETWORK_STATE','android.permission.CHANGE_WIFI_STATE']
+          hit=[x for x in forbidden if x in m]
+          assert not hit, hit
+          print('PASS: clean re-decode retains changed hooks and hard offline manifest boundary')
+          PY
+
+      - name: Produce static-completion verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > out/DIRECTIVE_EXEC002_STATIC_COMPLETION.md <<EOF
+          # DIRECTIVE — EXEC002 Static Completion Evidence
+
+          - Authoritative source SHA-256: $SOURCE_SHA256
+          - Planner source bundle SHA-256: $PLANNER_SOURCE_SHA256
+          - Balanced Upgrade decoded-source hooks: PASS
+          - Any-task duration persistence contract: PASS
+          - Local duration suggestion-history contract: PASS
+          - Planner Java compilation: PASS
+          - D8 Android desugaring/dex: PASS
+          - Full Balanced Upgrade static feature contract: PASS
+          - Full Apktool assembly: PASS
+          - Additional-dex archive merge: PASS
+          - Identity/minSdk21/targetSdk37: PASS
+          - Hard offline permission boundary: PASS
+          - Clean re-decode/reverification: PASS
+          - Android runtime acceptance: NOT EXECUTED / DEFERRED
+          - Physical handset acceptance: NOT EXECUTED / DEFERRED
+          - Release/signing/handover: NOT EXECUTED / DEFERRED
+
+          STATIC_COMPLETION=PASS
+          EOF
+          cat out/DIRECTIVE_EXEC002_STATIC_COMPLETION.md
+
+      - name: Upload static candidate and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-EXEC002-static-complete-v3
+          path: out
+          if-no-files-found: error
