@@ -1,0 +1,5 @@
+DIRECTIVE Android 16 remediation trigger
+
+Private preparation commit: cfc1a0225208a45952da01ffc2bcb98de680e533
+Target: TickTickPreferenceFragment.initIpChangePreference() null Preference removal
+Expected preparation evidence: obsolete_ip_change_preference_neutralised=true and exact-one canonical no-op verification PASS
