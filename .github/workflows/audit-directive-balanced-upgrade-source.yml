@@ -1,0 +1,129 @@
+name: Audit DIRECTIVE Balanced Upgrade Source
+
+on:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/audit-directive-balanced-upgrade-source.yml'
+      - 'ci/DIRECTIVE_BALANCED_UPGRADE_TRIGGER/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download and verify authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted audit/relevant
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SRC_ZIP="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SRC_ZIP"
+          echo "$SOURCE_SHA256  $SRC_ZIP" | sha256sum -c -
+          unzip -q "$SRC_ZIP" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n 1)"
+          test -n "$SRC_ROOT"
+          echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
+
+      - name: Inventory duration planning and scheduling capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json, shutil
+          root=Path(__import__('os').environ['SRC_ROOT'])
+          out=Path('audit'); rel=out/'relevant'; rel.mkdir(parents=True, exist_ok=True)
+          patterns=[
+            r'duration',r'estimat',r'planned',r'time.?block',r'time.?slot',r'timeline',r'schedule',r'arrange',
+            r'calendar',r'free.?time',r'workload',r'overload',r'conflict',r'deadline',r'due.?date',r'start.?date',
+            r'lock',r'pin',r'planner',r'plan.?task',r'auto.?plan',r'replan',r'recurr',r'repeat',r'template',
+            r'bulk',r'multi.?select',r'today',r'tomorrow',r'week',r'session'
+          ]
+          rx=re.compile('|'.join(f'(?:{p})' for p in patterns),re.I)
+          smali=[]; strings=[]; filenames=[]
+          copied=[]
+          for p in root.rglob('*'):
+            if not p.is_file(): continue
+            rp=str(p.relative_to(root)).replace('\\','/')
+            namehit=bool(rx.search(p.name))
+            if namehit: filenames.append(rp)
+            if p.suffix in ('.smali','.xml','.json','.txt','.yml','.yaml'):
+              try: txt=p.read_text('utf-8',errors='ignore')
+              except: continue
+              hits=[]
+              for i,line in enumerate(txt.splitlines(),1):
+                if rx.search(line): hits.append((i,line[:500]))
+              if hits:
+                if p.suffix=='.smali':
+                  methods=[line.strip() for line in txt.splitlines() if line.lstrip().startswith('.method')]
+                  smali.append({'path':rp,'hits':hits[:120],'methods':methods[:250]})
+                else:
+                  strings.append({'path':rp,'hits':hits[:120]})
+                # Copy high-value source files only; cap to keep artifact small.
+                low=rp.lower()
+                priority=any(k in low for k in ['task','duration','calendar','schedule','timeline','plan','date','time','repeat','recurr','template','lock','bulk'])
+                if priority and len(copied)<220 and p.stat().st_size<350000:
+                  dest=rel/rp
+                  dest.parent.mkdir(parents=True,exist_ok=True)
+                  shutil.copy2(p,dest); copied.append(rp)
+          (out/'filename_inventory.txt').write_text('\n'.join(sorted(filenames)))
+          (out/'smali_capability_hits.json').write_text(json.dumps(smali,indent=2))
+          (out/'resource_capability_hits.json').write_text(json.dumps(strings,indent=2))
+          (out/'copied_relevant_files.txt').write_text('\n'.join(copied))
+
+          # Extract class/field/method overview for likely task data models.
+          model=[]
+          model_rx=re.compile(r'(Task2|TaskBean|TaskModel|TaskData|TaskInfo|TaskEntity|Checklist|DateInfo|CalendarEvent|Repeat|Duration|ProjectData)',re.I)
+          for p in root.rglob('*.smali'):
+            if model_rx.search(p.name):
+              txt=p.read_text('utf-8',errors='ignore')
+              classline=next((x.strip() for x in txt.splitlines() if x.startswith('.class ')), '')
+              fields=[x.strip() for x in txt.splitlines() if x.startswith('.field ')]
+              methods=[x.strip() for x in txt.splitlines() if x.startswith('.method ')]
+              model.append({'path':str(p.relative_to(root)).replace('\\','/'),'class':classline,'fields':fields[:200],'methods':methods[:300]})
+          (out/'model_surface.json').write_text(json.dumps(model,indent=2))
+          print('smali files with hits',len(smali),'resource files with hits',len(strings),'copied',len(copied),'models',len(model))
+          PY
+
+      - name: Build focused grep reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '=== Duration/estimate symbols ==='
+            grep -RniE --include='*.smali' 'duration|estimatedDuration|estimateDuration|plannedDuration|timeBlock|timeSlot' "$SRC_ROOT" | head -n 5000 || true
+            echo '=== Planning/schedule symbols ==='
+            grep -RniE --include='*.smali' 'auto.?plan|replan|free.?time|workload|overload|conflict|timeline|scheduleTask|arrangeTask|lockTask|pinTask' "$SRC_ROOT" | head -n 5000 || true
+            echo '=== Date and recurrence symbols ==='
+            grep -RniE --include='*.smali' 'startDate|dueDate|deadline|repeat|recurr' "$SRC_ROOT" | head -n 5000 || true
+          } > audit/grep_symbols.txt
+          find "$SRC_ROOT/res" -type f -name '*.xml' -print0 | xargs -0 grep -niE 'duration|estimate|planned|time block|time slot|replan|workload|overload|lock|pin|weekly|week plan' > audit/resource_strings.txt || true
+
+      - name: Upload source capability audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-balanced-upgrade-source-audit
+          path: audit/
+          retention-days: 30
+          compression-level: 0
