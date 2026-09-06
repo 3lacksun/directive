@@ -1,0 +1,129 @@
+name: DIRECTIVE Launch Routing Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/directive-launch-routing-diagnostic.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download frozen source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted diag
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE_DOWNLOADED="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE_DOWNLOADED"
+          echo "$SOURCE_SHA256  $SOURCE_DOWNLOADED" | sha256sum -c -
+          unzip -q "$SOURCE_DOWNLOADED" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Trace launcher onboarding and auth routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=diag/DIRECTIVE_LAUNCH_ROUTING_DIAGNOSTIC.txt
+          : > "$OUT"
+
+          echo '=== MAIN/LAUNCHER manifest context ===' >> "$OUT"
+          python3 - "$ROOT/AndroidManifest.xml" >> "$OUT" <<'PY'
+          import sys,re
+          p=sys.argv[1]; t=open(p,encoding='utf-8').read().splitlines()
+          for i,line in enumerate(t):
+              if 'android.intent.action.MAIN' in line or 'android.intent.category.LAUNCHER' in line:
+                  a=max(0,i-15); b=min(len(t),i+16)
+                  print('\n'.join(f'{j+1}:{t[j]}' for j in range(a,b)))
+                  print('---')
+          PY
+
+          echo '=== Sign-in/onboarding resource strings ===' >> "$OUT"
+          grep -R -n -i -E 'Sign in with Email|Continue with Google|sign.?in|login|onboarding|Eisenhower Matrix|Others' "$ROOT/res" | head -n 3000 >> "$OUT" || true
+
+          echo '=== Resource IDs for sign-in/onboarding terms ===' >> "$OUT"
+          grep -R -n -i -E 'sign_in|signin|login|google|onboard|eisenhower|welcome|guide' "$ROOT/res/values" "$ROOT/res/values-*" 2>/dev/null | head -n 3000 >> "$OUT" || true
+
+          echo '=== Smali classes with auth/onboarding names ===' >> "$OUT"
+          find "$ROOT" -path '*/com/ticktick/*' -name '*.smali' \
+            | grep -Ei '(login|signin|sign_in|onboard|welcome|guide|account|auth|firstlaunch|launch)' \
+            | head -n 3000 >> "$OUT" || true
+
+          echo '=== Manifest activities mentioning auth/login/welcome/guide ===' >> "$OUT"
+          grep -n -i -E 'activity|login|sign|welcome|guide|launch|account|auth' "$ROOT/AndroidManifest.xml" | head -n 4000 >> "$OUT" || true
+
+          echo '=== Smali references to launcher and likely auth classes ===' >> "$OUT"
+          grep -R -n -i -E 'LoginActivity|SignIn|Signin|Welcome|Onboarding|GuideActivity|FirstLaunch|MeTaskActivity|TaskActivity' "$ROOT"/smali* --include='*.smali' \
+            | grep '/com/ticktick/' | head -n 5000 >> "$OUT" || true
+
+          echo '=== TickTickApplication / launcher activity methods ===' >> "$OUT"
+          python3 - "$ROOT" >> "$OUT" <<'PY'
+          from pathlib import Path
+          import re,sys
+          root=Path(sys.argv[1])
+          candidates=[]
+          for pat in ('TickTickApplication.smali','MeTaskActivity.smali','TaskActivity.smali','SplashActivity.smali','WelcomeActivity.smali','LoginActivity.smali'):
+              candidates.extend(root.glob('smali*/**/'+pat))
+          seen=set()
+          for p in candidates:
+              if p in seen: continue
+              seen.add(p)
+              txt=p.read_text('utf-8',errors='ignore')
+              print(f'===== {p.relative_to(root)} =====')
+              for name in ('onCreate','onStart','onResume','checkDomain','start','launch','goto','goTo','show','login'):
+                  rx=re.compile(r'(?ms)^\.method [^\n]*\b'+re.escape(name)+r'[^\n]*\n.*?^\.end method$')
+                  for m in rx.finditer(txt):
+                      block=m.group(0)
+                      if any(k.lower() in block.lower() for k in ('login','sign','guide','welcome','launch','intent','activity','first')):
+                          print(block[:30000]); print('---')
+          PY
+
+          echo '=== All application-owned startActivity calls with context ===' >> "$OUT"
+          python3 - "$ROOT" >> "$OUT" <<'PY'
+          from pathlib import Path
+          import sys
+          root=Path(sys.argv[1])
+          count=0
+          for p in root.glob('smali*/com/ticktick/**/*.smali'):
+              lines=p.read_text('utf-8',errors='ignore').splitlines()
+              for i,line in enumerate(lines):
+                  if 'startActivity' in line or 'startActivityForResult' in line:
+                      a=max(0,i-12); b=min(len(lines),i+13)
+                      block='\n'.join(lines[a:b])
+                      if any(k in block.lower() for k in ('login','sign','guide','welcome','launch','taskactivity','metaskactivity')):
+                          print(f'===== {p.relative_to(root)}:{i+1} =====')
+                          print(block)
+                          count += 1
+                          if count >= 500: raise SystemExit
+          PY
+
+          wc -c "$OUT"
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-launch-routing-diagnostic
+          retention-days: 7
+          path: diag/DIRECTIVE_LAUNCH_ROUTING_DIAGNOSTIC.txt
