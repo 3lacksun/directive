@@ -1,0 +1,2 @@
+DIRECTIVE Android 16 rebuild trigger after deterministic legacy Google Analytics initialisation neutralisation.
+Private support commit: d881ee7f71a2e94024b957205abea5c48355b788
