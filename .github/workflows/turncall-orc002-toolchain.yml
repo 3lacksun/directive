@@ -1,0 +1,103 @@
+name: TurnCall ORC002 Toolchain Factory
+
+on:
+  push:
+    branches: [ turncall-orc002-toolchain-06092026 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_API_LEVEL: "36"
+  ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
+  GRADLE_VERSION: "8.14.3"
+
+jobs:
+  provision:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+          accept-android-sdk-licenses: true
+
+      - name: Install Android 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
+          test -f "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}/android.jar"
+          test -x "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/aapt2"
+          test -f "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/lib/apksigner.jar"
+
+      - name: Install Gradle 8.14.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+          mkdir -p /tmp/gradle-dist
+          unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
+          /tmp/gradle-dist/gradle-${GRADLE_VERSION}/bin/gradle --version
+
+      - name: Warm exact Capacitor Android dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/warm
+          mkdir -p /tmp/warm/www
+          cd /tmp/warm
+          cat > package.json <<'JSON'
+          {"name":"turncall-cachewarm","version":"1.2.1","private":true,"type":"module","dependencies":{"@aparajita/capacitor-secure-storage":"8.0.0","@capacitor/android":"8.5.0","@capacitor/app":"8.0.0","@capacitor/camera":"8.0.0","@capacitor/core":"8.5.0","@capacitor/haptics":"8.0.0","@capacitor/keyboard":"8.0.0","@capacitor/local-notifications":"8.0.0","@capacitor/network":"8.0.0","@capacitor/preferences":"8.0.0","@capacitor/status-bar":"8.0.0"},"devDependencies":{"@capacitor/cli":"8.5.0","typescript":"5.7.3"}}
+          JSON
+          cat > capacitor.config.ts <<'TS'
+          import type { CapacitorConfig } from '@capacitor/cli';
+          const config: CapacitorConfig = { appId: 'im.turncall.cachewarm', appName: 'TurnCallCacheWarm', webDir: 'www' };
+          export default config;
+          TS
+          echo '<!doctype html><title>cache warm</title>' > www/index.html
+          npm install --no-fund --no-audit
+          npx cap add android
+          npx cap sync android
+          grep -F "classpath 'com.android.tools.build:gradle:8.13.0'" android/build.gradle
+          grep -F "classpath 'com.google.gms:google-services:4.4.4'" android/build.gradle
+          grep -F 'compileSdkVersion = 36' android/variables.gradle
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          cd android
+          /tmp/gradle-dist/gradle-${GRADLE_VERSION}/bin/gradle --no-daemon :app:assembleDebug
+
+      - name: Package portable toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE/orc002-toolchain"
+          mkdir -p "$ROOT/android-sdk/platforms" "$ROOT/android-sdk/build-tools" "$ROOT/gradle-user-home/caches" "$ROOT/gradle"
+          cp -a "$ANDROID_HOME/platforms/android-${ANDROID_API_LEVEL}" "$ROOT/android-sdk/platforms/"
+          cp -a "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS_VERSION}" "$ROOT/android-sdk/build-tools/"
+          cp -a "$ANDROID_HOME/platform-tools" "$ROOT/android-sdk/"
+          if [[ -d "$ANDROID_HOME/licenses" ]]; then cp -a "$ANDROID_HOME/licenses" "$ROOT/android-sdk/"; fi
+          cp -a "/tmp/gradle-dist/gradle-${GRADLE_VERSION}" "$ROOT/gradle/"
+          cp -a "$HOME/.gradle/caches/modules-2" "$ROOT/gradle-user-home/caches/"
+          find "$ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > "$ROOT/TOOLCHAIN_SHA256SUMS.txt"
+          printf 'Android API=36\nBuild Tools=36.0.0\nGradle=8.14.3\n' > "$ROOT/TOOLCHAIN_MANIFEST.txt"
+          tar --zstd -cf "$GITHUB_WORKSPACE/turncall-orc002-toolchain.tar.zst" -C "$GITHUB_WORKSPACE" orc002-toolchain
+          sha256sum "$GITHUB_WORKSPACE/turncall-orc002-toolchain.tar.zst" > "$GITHUB_WORKSPACE/turncall-orc002-toolchain.tar.zst.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turncall-orc002-toolchain-api36-gradle8143
+          path: |
+            turncall-orc002-toolchain.tar.zst
+            turncall-orc002-toolchain.tar.zst.sha256
+          compression-level: 0
+          retention-days: 7
