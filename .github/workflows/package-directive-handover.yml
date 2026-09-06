@@ -1,0 +1,178 @@
+name: Package DIRECTIVE Verified Handover
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/package-directive-handover.yml'
+      - 'ci/DIRECTIVE_HANDOVER_TRIGGER/**'
+
+permissions:
+  contents: read
+
+env:
+  PRIVATE_REPO: 3lacksun/-directive-v2-offline
+  PRIVATE_RELEASE_TAG: directive-ci-build-latest
+  HANDOVER_RELEASE_TAG: directive-handover-latest
+  FINAL_APK: DIRECTIVE_06092026093815.apk
+  FINAL_APK_SHA256: 334648ae61cb867849a0a248d885e4d4607794f915662b3803c66ca72325d811
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+  ACCEPTANCE_RUN: '34022191435'
+  BUILD_JOB: '101456677215'
+  RUNTIME_JOB: '101456848158'
+  RUNTIME_ARTIFACT: '9985931283'
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout public acceptance bridge
+        uses: actions/checkout@v5
+
+      - name: Require private source token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+
+      - name: Download exact runtime-accepted release assets
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p handover/apk handover/evidence/runtime handover/support handover/workflows handover/docs
+          for asset in \
+            "$FINAL_APK" \
+            "$FINAL_APK.sha256" \
+            DIRECTIVE_BUILD_METADATA_06092026093815.txt \
+            DIRECTIVE_RUNTIME_EVIDENCE_06092026093815.zip \
+            DIRECTIVE_RUNTIME_VERDICT.txt \
+            DIRECTIVE_FIRST_LAUNCH_UI_VERDICT.txt \
+            DIRECTIVE_RELAUNCH_UI_VERDICT.txt \
+            DIRECTIVE_UI.xml \
+            DIRECTIVE_RELAUNCH_UI.xml; do
+            gh release download "$PRIVATE_RELEASE_TAG" --repo "$PRIVATE_REPO" --pattern "$asset" --dir handover/evidence/runtime
+          done
+          mv "handover/evidence/runtime/$FINAL_APK" handover/apk/
+          mv "handover/evidence/runtime/$FINAL_APK.sha256" handover/apk/
+          ACTUAL="$(sha256sum "handover/apk/$FINAL_APK" | awk '{print $1}')"
+          test "$ACTUAL" = "$FINAL_APK_SHA256"
+          RECORDED="$(awk '{print $1}' "handover/apk/$FINAL_APK.sha256")"
+          test "$RECORDED" = "$FINAL_APK_SHA256"
+          unzip -t "handover/apk/$FINAL_APK" >/dev/null
+          unzip -t handover/evidence/runtime/DIRECTIVE_RUNTIME_EVIDENCE_06092026093815.zip >/dev/null
+
+      - name: Fetch current authoritative support and release documentation
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in \
+            support/prepare_directive_package.py \
+            support/prepare_directive_package_base.py \
+            support/apply_directive_offline_runtime_cleanup.py \
+            support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh; do
+            out="handover/support/$(basename "$path")"
+            gh api "repos/$PRIVATE_REPO/contents/$path?ref=main" --jq .content | tr -d '\n' | base64 --decode > "$out"
+          done
+          for path in \
+            docs/DIRECTIVE_FINAL_RELEASE_06092026093815.md \
+            docs/DIRECTIVE_ORC002_FINAL_INDEPENDENT_AUDIT_06092026115614.txt \
+            docs/DIRECTIVE_STATE.json; do
+            out="handover/docs/$(basename "$path")"
+            gh api "repos/$PRIVATE_REPO/contents/$path?ref=main" --jq .content | tr -d '\n' | base64 --decode > "$out"
+          done
+          cp .github/workflows/build-directive.yml handover/workflows/build-directive.yml
+          cp .github/workflows/package-directive-handover.yml handover/workflows/package-directive-handover.yml
+          bash -n handover/support/DIRECTIVE_RUNTIME_ACCEPTANCE.sh
+          python3 -m py_compile handover/support/prepare_directive_package.py handover/support/prepare_directive_package_base.py handover/support/apply_directive_offline_runtime_cleanup.py
+
+      - name: Generate handover authority and continuation records
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > handover/DIRECTIVE_HANDOVER.md <<EOF
+          # DIRECTIVE — VERIFIED DIRECT-ENTRY HANDOVER
+
+          Product: DIRECTIVE
+          Tagline: Plan. Execute. Advance.
+          Release state: GO — automated Android 16 usable-organiser acceptance PASS
+          Final APK: $FINAL_APK
+          Final APK SHA-256: $FINAL_APK_SHA256
+          Frozen source SHA-256: $SOURCE_SHA256
+          Android acceptance run: $ACCEPTANCE_RUN
+          Build job: $BUILD_JOB
+          Runtime job: $RUNTIME_JOB
+          Runtime artifact: $RUNTIME_ARTIFACT
+
+          This handover supersedes the earlier release that was reopened after real-device evidence showed a legacy sign-in/onboarding gate.
+
+          Current accepted behaviour:
+          - clean install enters the local organiser rather than the legacy login/onboarding flow;
+          - Inbox and Add Task are present on first launch and relaunch;
+          - legacy Email/Google sign-in, onboarding carousel, cloud-save and account-creation surfaces are rejected by runtime acceptance;
+          - no application fatal exception is present in accepted cold-launch/relaunch evidence;
+          - no obsolete online-era execution is present in accepted cold-launch/relaunch evidence;
+          - the five forbidden network permissions remain absent;
+          - minSdk 21, targetSdk 37, arm64-v8a retained.
+
+          Internal compatibility package identifier remains com.ticktick.task. It is not the product name.
+
+          Automated Android 16 acceptance is established. No new physical-handset PASS is claimed for these exact final bytes.
+          EOF
+
+          cat > handover/DIRECTIVE_CONTINUATION_PROMPT.md <<EOF
+          # DIRECTIVE — FUTURE CONTINUATION
+
+          Continue DIRECTIVE only from this verified direct-entry handover.
+
+          Authoritative final APK: $FINAL_APK
+          APK SHA-256: $FINAL_APK_SHA256
+          Frozen source SHA-256: $SOURCE_SHA256
+          Accepted Android 16 run: $ACCEPTANCE_RUN
+
+          Preserve the hard offline boundary and direct-entry behaviour. Do not restore login/onboarding, cloud sync, analytics, billing, OAuth/social login, remote schedulers, web integrations, Firebase/push or any forbidden network permission.
+
+          Do not reopen a closed defect without new evidence against these exact current bytes. If a physical-device issue is reported, reproduce/diagnose it against this baseline and retain the Android 16 usable-organiser acceptance gate.
+          EOF
+
+      - name: Build deterministic checksum manifest and handover ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd handover && find . -type f ! -name DIRECTIVE_HANDOVER_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > DIRECTIVE_HANDOVER_SHA256SUMS.txt)
+          (cd handover && sha256sum -c DIRECTIVE_HANDOVER_SHA256SUMS.txt)
+          TIMESTAMP="$(TZ=Europe/London date +'%d%m%Y%H%M%S')"
+          ZIP="DIRECTIVE_HANDOVER_${TIMESTAMP}.zip"
+          (cd handover && zip -qr "../$ZIP" .)
+          unzip -t "$ZIP" >/dev/null
+          sha256sum "$ZIP" | tee "$ZIP.sha256"
+          echo "HANDOVER_ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "HANDOVER_SHA_FILE=$ZIP.sha256" >> "$GITHUB_ENV"
+
+      - name: Persist handover to private release
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" >/dev/null \
+            || gh release create "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" --title 'DIRECTIVE Verified Handover' --notes 'Current verified DIRECTIVE direct-entry handover.'
+          gh release view "$HANDOVER_RELEASE_TAG" --repo "$PRIVATE_REPO" --json assets --jq '.assets[].name' \
+            | grep -E '^DIRECTIVE_HANDOVER_[0-9]{14}\.zip(\.sha256)?$' \
+            | while IFS= read -r old; do gh release delete-asset "$HANDOVER_RELEASE_TAG" "$old" --repo "$PRIVATE_REPO" --yes || true; done
+          gh release upload "$HANDOVER_RELEASE_TAG" "$HANDOVER_ZIP" "$HANDOVER_SHA_FILE" --repo "$PRIVATE_REPO" --clobber
+
+      - name: Upload verified handover artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-verified-handover
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            DIRECTIVE_HANDOVER_*.zip
+            DIRECTIVE_HANDOVER_*.zip.sha256
