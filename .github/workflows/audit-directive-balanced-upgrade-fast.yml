@@ -1,0 +1,83 @@
+name: Audit DIRECTIVE Balanced Upgrade Fast
+
+on:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - '.github/workflows/audit-directive-balanced-upgrade-fast.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require private token
+        env:
+          PRIVATE_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        run: test -n "$PRIVATE_TOKEN"
+      - name: Download source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input extracted audit
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SRC_ZIP="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          echo "$SOURCE_SHA256  $SRC_ZIP" | sha256sum -c -
+          unzip -q "$SRC_ZIP" -d extracted
+          SRC_ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$SRC_ROOT"
+          echo "SRC_ROOT=$SRC_ROOT" >> "$GITHUB_ENV"
+      - name: Extract high-value symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '=== Candidate filenames ==='
+            find "$SRC_ROOT" -type f \( -name '*Task*.smali' -o -name '*Duration*.smali' -o -name '*Calendar*.smali' -o -name '*Timeline*.smali' -o -name '*Schedule*.smali' -o -name '*Plan*.smali' -o -name '*Repeat*.smali' -o -name '*Date*.smali' \) | sed "s#^$SRC_ROOT/##" | head -n 12000
+          } > audit/candidate_filenames.txt
+
+          for term in 'plannedDuration' 'duration' 'estimate' 'estimated' 'timeBlock' 'timeSlot' 'freeTime' 'workload' 'overload' 'replan' 'autoPlan' 'lockTask' 'isLocked' 'deadline' 'dueDate' 'startDate' 'repeatFlag' 'repeatFrom' 'timeline'; do
+            echo "===== $term =====" >> audit/symbol_hits.txt
+            grep -RniF --include='*.smali' --include='*.xml' "$term" "$SRC_ROOT" | head -n 1000 >> audit/symbol_hits.txt || true
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re,shutil,json
+          root=Path(os.environ['SRC_ROOT']); out=Path('audit/selected'); out.mkdir(parents=True,exist_ok=True)
+          selectors=['Task2.smali','TaskBean.smali','TaskModel.smali','TaskInfo.smali','TaskData.smali','TaskDetailActivity.smali','TaskDetailFragment.smali','TaskEditFragment.smali','TaskQuickAddFragment.smali','CalendarViewFragment.smali','CalendarFragment.smali','TimelineFragment.smali','Repeat*.smali']
+          matches=[]
+          for p in root.rglob('*.smali'):
+            n=p.name.lower()
+            if n in {'task2.smali','taskbean.smali','taskmodel.smali','taskinfo.smali','taskdata.smali'} or any(k in n for k in ['taskdetail','taskedit','calendarview','timeline','duration','schedule','arrange','repeathelper']):
+              try: txt=p.read_text('utf-8',errors='ignore')
+              except: continue
+              if any(k.lower() in txt.lower() for k in ['duration','estimated','startdate','duedate','repeat','calendar','timeline','schedule']):
+                rp=p.relative_to(root); dest=out/rp; dest.parent.mkdir(parents=True,exist_ok=True)
+                if p.stat().st_size < 450000 and len(matches)<120:
+                  shutil.copy2(p,dest); matches.append(str(rp))
+          Path('audit/selected_files.txt').write_text('\n'.join(matches))
+          print('selected',len(matches))
+          PY
+
+          find "$SRC_ROOT/res" -type f -name '*.xml' -print0 | xargs -0 grep -niEi 'duration|estimated|estimate|time block|time slot|schedule|calendar|timeline|plan|weekly|workload|lock|pin' > audit/resource_hits.txt || true
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-balanced-upgrade-fast-audit
+          path: audit/
+          retention-days: 30
+          compression-level: 0
