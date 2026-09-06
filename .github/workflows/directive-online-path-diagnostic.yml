@@ -42,22 +42,38 @@ jobs:
           test -n "$ROOT"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Capture obsolete online-era paths
+      - name: Trace application-owned Analytics startup
         shell: bash
         run: |
           set -euo pipefail
           OUT=diag/DIRECTIVE_OFFLINE_PATH_DIAGNOSTIC.txt
           : > "$OUT"
-          echo '=== Google Analytics / GAv4 / analytics identifiers ===' >> "$OUT"
-          grep -R -n -i -E 'google[._ ]?analytics|GAv4|analytics|Tracker|Measurement|CampaignTracking|AnalyticsReceiver|AnalyticsService' "$ROOT"/smali* "$ROOT/AndroidManifest.xml" "$ROOT/res" --include='*.smali' --include='*.xml' 2>/dev/null | head -n 4000 >> "$OUT" || true
-          echo '=== ACCESS_NETWORK_STATE references ===' >> "$OUT"
-          grep -R -n -E 'ACCESS_NETWORK_STATE|ConnectivityManager;->getActiveNetworkInfo' "$ROOT"/smali* "$ROOT/AndroidManifest.xml" --include='*.smali' --include='*.xml' 2>/dev/null | head -n 2000 >> "$OUT" || true
-          echo '=== analytics package/class inventory ===' >> "$OUT"
-          find "$ROOT" -type f \( -path '*google/android/gms/analytics*' -o -path '*analytics*' \) -print | sort | head -n 3000 >> "$OUT" || true
+          echo '=== Application-owned references to Google Analytics classes ===' >> "$OUT"
+          grep -R -n -E 'Lcom/google/android/gms/(analytics|internal/gtm)/' "$ROOT"/smali* --include='*.smali' \
+            | grep -v '/com/google/android/gms/' | head -n 4000 >> "$OUT" || true
+          echo '=== Direct GoogleAnalytics getInstance/newTracker/dispatch references ===' >> "$OUT"
+          grep -R -n -E 'GoogleAnalytics;->|Tracker;->|AnalyticsReceiver|AnalyticsService|AnalyticsJobService|CampaignTracking' "$ROOT"/smali* --include='*.smali' \
+            | grep -v '/com/google/android/gms/' | head -n 4000 >> "$OUT" || true
+          echo '=== TickTick application analytics-labelled methods/classes ===' >> "$OUT"
+          grep -R -n -i -E 'google.?analytics|analytics|tracking' "$ROOT"/smali* --include='*.smali' \
+            | grep '/com/ticktick/' | head -n 5000 >> "$OUT" || true
+          echo '=== DataTracker companion init method ===' >> "$OUT"
+          python3 - "$ROOT" >> "$OUT" <<'PY'
+          from pathlib import Path
+          import re, sys
+          root=Path(sys.argv[1])
+          files=list(root.glob('smali*/com/ticktick/task/utils/DataTracker$Companion.smali'))
+          if len(files)!=1:
+              print('DataTracker companion count', len(files)); raise SystemExit(0)
+          text=files[0].read_text('utf-8')
+          for name in ('init','scheduleUpload','upload','sendActivationEvent'):
+              rx=re.compile(r'(?ms)^\.method [^\n]*\b'+re.escape(name)+r'\([^\n]*?^\.end method$')
+              ms=list(rx.finditer(text))
+              print(f'--- {name}: {len(ms)} method(s) ---')
+              for m in ms: print(m.group(0)[:20000])
+          PY
           echo '=== Manifest analytics components ===' >> "$OUT"
           grep -n -i -E 'analytics|measurement|campaign' "$ROOT/AndroidManifest.xml" >> "$OUT" || true
-          echo '=== Existing offline cleanup targets ===' >> "$OUT"
-          grep -R -n -E 'DataTracker\$Companion;->(init|sendActivationEvent|upload)|Utils;->isInNetwork|Ll8/o;|Ll8/o\$a;' "$ROOT"/smali* --include='*.smali' | head -n 2000 >> "$OUT" || true
           wc -c "$OUT"
 
       - name: Upload diagnostic
