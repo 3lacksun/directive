@@ -1,0 +1,1 @@
+Inspect first-run cache defaults and completion lambda so the onboarding bypass preserves DIRECTIVE feature configuration.
