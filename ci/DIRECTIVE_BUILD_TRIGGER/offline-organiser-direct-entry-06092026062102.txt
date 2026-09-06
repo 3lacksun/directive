@@ -1,0 +1,3 @@
+DIRECTIVE rebuild trigger
+Timestamp: 06092026062102
+Purpose: consume private remediation commits afc9986d425e539483a12bf639862f5978844f84 and e8a85a90acff1992c0625c714a05b3f3a17bccf6; bypass obsolete login and local feature-selection onboarding, disable residual preset-task/user-guide network calls, and verify direct access to the existing offline organiser on Android 16.
