@@ -1,0 +1,70 @@
+name: DIRECTIVE First-Run Source Diagnostic
+
+on:
+  push:
+    branches: [directive-ci-build-05092026]
+    paths:
+      - 'ci/DIRECTIVE_DIAG_TRIGGER/**'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPO: 3lacksun/-directive-v2-offline
+  SOURCE_TAG: directive-v2-source-04092026
+  SOURCE_ASSET_PATTERN: DIRECTIVE*UIUX_AUDITED_BUILD_READY_SOURCE_04092026175739-1.zip
+  SOURCE_SHA256: 40f320d3155fa34a0c4965d3d6848edc5adb39811911d41f0ef36e9f5f78dbbb
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download authoritative source
+        env:
+          GH_TOKEN: ${{ secrets.DIRECTIVE_V2_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          mkdir -p input extracted selected
+          gh release download "$SOURCE_TAG" --repo "$SOURCE_REPO" \
+            --pattern "$SOURCE_ASSET_PATTERN" --dir input
+          SOURCE="$(find input -maxdepth 1 -type f -name "$SOURCE_ASSET_PATTERN" -print -quit)"
+          test -n "$SOURCE"
+          echo "$SOURCE_SHA256  $SOURCE" | sha256sum -c -
+          unzip -q "$SOURCE" -d extracted
+          ROOT="$(find extracted -type f -name apktool.yml -printf '%h\n' | head -n1)"
+          test -n "$ROOT"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Extract first-run classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            NewUserConfigHelper.smali \
+            NewUserConfigActivityHelper.smali \
+            NewUserConfigActivity.smali \
+            RetentionConfigManager.smali \
+            NewbieDispatchActivity.smali; do
+            mapfile -t hits < <(find "$ROOT" -type f -name "$name" -print)
+            if [ "${#hits[@]}" -ne 1 ]; then
+              echo "expected exactly one $name, found ${#hits[@]}" >&2
+              exit 1
+            fi
+            cp "${hits[0]}" "selected/$name"
+          done
+          grep -RniE 'tryShowNewUserConfig|completeConfig|goToMainActivity|shouldCreatePresetTask|refreshUserGuide|tryLoadUserGuide|newUserConfigDone|Continue|onNewUserConfigDone|saveUserConfigTabBar|applyUserTabBarConfig' selected \
+            > selected/KEY_METHOD_INDEX.txt || true
+          sha256sum selected/* > selected/SHA256SUMS.txt
+
+      - name: Upload selected source
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-first-run-source-diagnostic
+          retention-days: 3
+          if-no-files-found: error
+          path: selected/
