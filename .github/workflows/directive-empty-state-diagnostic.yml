@@ -44,16 +44,25 @@ jobs:
           set -euo pipefail
           OUT=diag/DIRECTIVE_EMPTY_STATE_DIAGNOSTIC.txt
           : > "$OUT"
-          echo '=== Resource field references ===' >> "$OUT"
-          grep -R -n -E 'tips_save_to_cloud|tips_try_sign_in|create_account' "$ROOT"/smali* --include='*.smali' | head -n 4000 >> "$OUT" || true
-          echo '=== EmptyViewFactory files ===' >> "$OUT"
-          for p in $(find "$ROOT" -path '*/com/ticktick/task/helper/EmptyViewFactory*.smali' -print); do
-            echo "===== ${p#$ROOT/} =====" >> "$OUT"
-            sed -n '1,3200p' "$p" >> "$OUT"
-          done
-          echo '=== Callers setting cloud/account model ===' >> "$OUT"
-          grep -R -n -E 'tips_save_to_cloud|tips_try_sign_in|create_account|EmptyViewFactory;->' "$ROOT"/smali* --include='*.smali' \
-            | grep '/com/ticktick/' | head -n 7000 >> "$OUT" || true
+          EV="$(find "$ROOT" -path '*/com/ticktick/task/helper/EmptyViewFactory.smali' -print -quit)"
+          PL="$(find "$ROOT" -path '*/com/ticktick/task/controller/viewcontroller/ProjectListChildFragment.smali' -print -quit)"
+          test -n "$EV"; test -n "$PL"
+          echo '=== EmptyViewFactory exact cloud model region 4760-5030 ===' >> "$OUT"
+          sed -n '4760,5030p' "$EV" >> "$OUT"
+          echo '=== ProjectListChildFragment exact create-account region 7380-7660 ===' >> "$OUT"
+          sed -n '7380,7660p' "$PL" >> "$OUT"
+          echo '=== Enclosing methods by resource-reference scan ===' >> "$OUT"
+          python3 - "$EV" "$PL" >> "$OUT" <<'PY'
+          from pathlib import Path
+          import re,sys
+          for p in map(Path,sys.argv[1:]):
+              text=p.read_text('utf-8')
+              print('=====',p.name,'=====')
+              for m in re.finditer(r'(?ms)^\.method [^\n]*\n.*?^\.end method$',text):
+                  block=m.group(0)
+                  if any(k in block for k in ('tips_save_to_cloud','tips_try_sign_in','create_account')):
+                      print(block[:50000]); print('---')
+          PY
           wc -c "$OUT"
       - name: Upload diagnostic
         uses: actions/upload-artifact@v4
