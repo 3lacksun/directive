@@ -55,20 +55,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out/toolchain/platforms/$ANDROID_PLATFORM
+          mkdir -p "out/toolchain/platforms/$ANDROID_PLATFORM" out/toolchain/build-tools
           cp apktool.jar out/toolchain/
           cp "$ANDROID_HOME/platforms/$ANDROID_PLATFORM/android.jar" \
              "out/toolchain/platforms/$ANDROID_PLATFORM/android.jar"
-          cp -a "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" out/toolchain/build-tools
-          tar -C out -czf out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz toolchain
-          sha256sum out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz \
-            | tee out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz.sha256
+          cp -a "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" out/toolchain/build-tools/
           test -s out/toolchain/apktool.jar
           test -s "out/toolchain/platforms/$ANDROID_PLATFORM/android.jar"
           test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/aapt2"
           test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/zipalign"
-          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/apksigner"
-          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/d8"
+          test -f "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+          test -f "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/d8"
+          tar -C out -czf out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz toolchain
+          sha256sum out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz \
+            | tee out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz.sha256
 
       - name: Upload toolchain artifact
         uses: actions/upload-artifact@v4
