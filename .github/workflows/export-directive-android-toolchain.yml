@@ -1,0 +1,81 @@
+name: Export DIRECTIVE Android Toolchain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-directive-android-toolchain.yml'
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_PLATFORM: android-35
+  BUILD_TOOLS_VERSION: 35.0.0
+  APKTOOL_VERSION: 2.12.1
+  APKTOOL_SHA256: 66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa
+
+jobs:
+  export:
+    name: Export public Android build toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;$ANDROID_PLATFORM" "build-tools;$BUILD_TOOLS_VERSION"
+
+      - name: Download and verify Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
+            -o apktool.jar
+          echo "$APKTOOL_SHA256  apktool.jar" | sha256sum -c -
+          java -jar apktool.jar --version
+
+      - name: Package toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/toolchain/platforms/$ANDROID_PLATFORM
+          cp apktool.jar out/toolchain/
+          cp "$ANDROID_HOME/platforms/$ANDROID_PLATFORM/android.jar" \
+             "out/toolchain/platforms/$ANDROID_PLATFORM/android.jar"
+          cp -a "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" out/toolchain/build-tools
+          tar -C out -czf out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz toolchain
+          sha256sum out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz \
+            | tee out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz.sha256
+          test -s out/toolchain/apktool.jar
+          test -s "out/toolchain/platforms/$ANDROID_PLATFORM/android.jar"
+          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/aapt2"
+          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/zipalign"
+          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+          test -x "out/toolchain/build-tools/$BUILD_TOOLS_VERSION/d8"
+
+      - name: Upload toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE-android-toolchain-api35-bt35-apktool2121
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz
+            out/DIRECTIVE_ANDROID_TOOLCHAIN_API35_BT35_APKTOOL2121.tgz.sha256
