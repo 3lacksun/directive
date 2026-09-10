@@ -1,0 +1,12 @@
+{
+  "url": "https://github.com/3lacksun/directive/releases/download/directive2-build-input-10092026/DIRECTIVE_2_APKBUILDER_1_1_0_PROJECT_09092026105600.zip",
+  "sha256": "78263f9236855d40e522596f21630dd134e380c55d7f3a7814caedf5bfa4d3a3",
+  "filename": "DIRECTIVE_2_APKBUILDER_1_1_0_PROJECT_09092026105600.zip",
+  "size_bytes": 114227574,
+  "release_tag": "directive2-build-input-10092026",
+  "asset_id": 554058346,
+  "target_package": "com.directive.v2",
+  "target_label": "DIRECTIVE 2",
+  "target_version_name": "2.0.4",
+  "target_version_code": 8204
+}
