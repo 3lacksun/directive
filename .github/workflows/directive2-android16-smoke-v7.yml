@@ -1,0 +1,102 @@
+name: DIRECTIVE 2 Android 16 Smoke v7
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - '.github/workflows/directive2-android16-smoke-v7.yml'
+      - 'support/directive2_github_build.sh'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android16:
+    name: Build and Android 16 smoke acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build exact DIRECTIVE 2 APK
+        shell: bash
+        run: |
+          chmod +x support/directive2_github_build.sh
+          support/directive2_github_build.sh
+      - name: Android 16 emulator smoke acceptance
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -euo pipefail
+            mkdir -p out/runtime
+            APK=out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk
+            adb wait-for-device
+            adb shell getprop ro.build.version.sdk | tee out/runtime/API_LEVEL.txt
+            test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '36'
+            adb install -r "$APK" | tee out/runtime/ADB_INSTALL.txt
+            adb shell pm list packages | grep -F 'package:com.directive.v2' | tee out/runtime/PACKAGE_INSTALLED.txt
+            adb shell pm grant com.directive.v2 android.permission.READ_CALENDAR || true
+            adb shell pm grant com.directive.v2 android.permission.WRITE_CALENDAR || true
+            adb logcat -c
+            set +e
+            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.directive.v2 > out/runtime/COLD_LAUNCH.txt 2>&1
+            rc=$?
+            set -e
+            cat out/runtime/COLD_LAUNCH.txt
+            test "$rc" -eq 0
+            sleep 8
+            adb shell pidof com.directive.v2 | tee out/runtime/PID_AFTER_COLD_LAUNCH.txt
+            test -s out/runtime/PID_AFTER_COLD_LAUNCH.txt
+            adb shell uiautomator dump /sdcard/directive_ui.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/directive_ui.xml out/runtime/DIRECTIVE_UI_COLD.xml >/dev/null 2>&1 || true
+            for i in 1 2 3; do
+              adb shell input keyevent KEYCODE_HOME
+              sleep 1
+              adb shell monkey -p com.directive.v2 -c android.intent.category.LAUNCHER 1 > "out/runtime/RELAUNCH_${i}.txt" 2>&1
+              sleep 2
+              adb shell pidof com.directive.v2 > "out/runtime/PID_RELAUNCH_${i}.txt"
+              test -s "out/runtime/PID_RELAUNCH_${i}.txt"
+            done
+            adb logcat -d -v threadtime > out/runtime/LOGCAT.txt
+            if grep -E 'FATAL EXCEPTION|ForegroundServiceDidNotStartInTimeException|RemoteServiceException.*startForeground|Process: com\.directive\.v2.*FATAL' out/runtime/LOGCAT.txt; then
+              echo 'ANDROID16_SMOKE=FAIL_CRASH' | tee out/runtime/ANDROID16_STATUS.txt
+              exit 1
+            fi
+            if [ -s out/runtime/DIRECTIVE_UI_COLD.xml ]; then
+              if grep -Eqi 'TickTick|Tixit|Dida365|滴答清单' out/runtime/DIRECTIVE_UI_COLD.xml; then
+                echo 'ANDROID16_SMOKE=FAIL_LEGACY_VISIBLE_BRANDING' | tee out/runtime/ANDROID16_STATUS.txt
+                exit 1
+              fi
+            fi
+            printf '%s\n' 'ANDROID16_SMOKE=PASS' 'cold_launch=PASS' 'three_relaunch_cycles=PASS' 'fatal_crash_scan=PASS' 'physical_acceptance=UNEXECUTED' 'final_go=false' | tee out/runtime/ANDROID16_STATUS.txt
+      - name: Upload APK runtime and build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_2_2.0.4_ANDROID16_SMOKE_v7
+          path: |
+            out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk
+            out/evidence/
+            out/runtime/
+          if-no-files-found: warn
+          retention-days: 30
