@@ -1,0 +1,48 @@
+name: DIRECTIVE 2 Project Build v6
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'DIRECTIVE2_SOURCE.json'
+      - 'support/directive2_github_build.sh'
+      - '.github/workflows/directive2-project-build-v6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and statically verify DIRECTIVE 2 v6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Execute deterministic DIRECTIVE build
+        shell: bash
+        run: |
+          chmod +x support/directive2_github_build.sh
+          support/directive2_github_build.sh
+      - name: Upload APK and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_2_2.0.4_GITHUB_TEST_v6
+          path: |
+            out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk
+            out/evidence/
+          if-no-files-found: error
+          retention-days: 30
