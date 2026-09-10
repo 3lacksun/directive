@@ -12,8 +12,8 @@ permissions:
 
 jobs:
   runtime:
-    name: Build and Android 16 ARM install smoke
-    runs-on: ubuntu-24.04-arm
+    name: Build and Android 16 ARM guest install smoke
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -21,21 +21,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
       - name: Install Android build toolchain
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build DIRECTIVE 3 exact candidate
         shell: bash
         run: |
           chmod +x support/directive3_install_safe_build.sh
           support/directive3_install_safe_build.sh
-      - name: Android 16 ARM smoke acceptance
+      - name: Android 16 ARM64 guest smoke acceptance
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -43,6 +43,7 @@ jobs:
           arch: arm64-v8a
           profile: pixel_6
           disable-animations: true
+          emulator-boot-timeout: 1200
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
             set -eu
@@ -50,13 +51,15 @@ jobs:
             APK=out-v8/DIRECTIVE_3_3.0.0_INSTALL_SAFE_TEST.apk
             adb wait-for-device
             adb shell getprop ro.build.version.sdk | tee out-v8/runtime/API_LEVEL.txt
+            adb shell getprop ro.product.cpu.abi | tee out-v8/runtime/ABI.txt
             test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '36'
+            test "$(adb shell getprop ro.product.cpu.abi | tr -d '\r')" = 'arm64-v8a'
             adb install "$APK" 2>&1 | tee out-v8/runtime/ADB_INSTALL.txt
             grep -q 'Success' out-v8/runtime/ADB_INSTALL.txt
             adb shell pm path com.directive.v3 | tee out-v8/runtime/PACKAGE_PATH.txt
             adb logcat -c
             adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.directive.v3 2>&1 | tee out-v8/runtime/COLD_LAUNCH.txt
-            sleep 8
+            sleep 10
             adb shell pidof com.directive.v3 | tee out-v8/runtime/PID.txt
             test -s out-v8/runtime/PID.txt
             adb logcat -d -v threadtime > out-v8/runtime/LOGCAT.txt
