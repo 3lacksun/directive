@@ -1,0 +1,183 @@
+name: DIRECTIVE 2 Project Build v3
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'DIRECTIVE2_SOURCE.json'
+      - '.github/workflows/directive2-project-build-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TOOLS_VERSION: '35.0.0'
+  ANDROID_PLATFORM: 'android-35'
+  MIN_SDK: '21'
+
+jobs:
+  build:
+    name: Build and verify DIRECTIVE 2 v3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android tools and smali
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;$ANDROID_PLATFORM" "build-tools;$BUILD_TOOLS_VERSION"
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y smali >/dev/null
+
+      - name: Materialise exact uploaded source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/source.env
+          import json, shlex
+          d=json.load(open('DIRECTIVE2_SOURCE.json'))
+          assert d['sha256']=='78263f9236855d40e522596f21630dd134e380c55d7f3a7814caedf5bfa4d3a3'
+          assert d['filename']=='DIRECTIVE_2_APKBUILDER_1_1_0_PROJECT_09092026105600.zip'
+          print('SOURCE_URL='+shlex.quote(d['url']))
+          print('SOURCE_SHA256='+shlex.quote(d['sha256']))
+          PY
+          source /tmp/source.env
+          curl -fL --retry 5 --retry-delay 2 "$SOURCE_URL" -o source.zip
+          echo "$SOURCE_SHA256  source.zip" | sha256sum -c -
+          unzip -t source.zip > SOURCE_ZIP_TEST.txt
+          rm -rf input && mkdir input
+          unzip -q source.zip -d input
+          PROJECT_ROOT="$(python3 - <<'PY'
+          from pathlib import Path
+          c=[]
+          for p in Path('input').rglob('AndroidManifest.xml'):
+              r=p.parent
+              if (r/'.project').is_file() and (r/'res').is_dir() and (r/'smali').is_dir(): c.append(r)
+          if len(c)!=1: raise SystemExit(f'expected one project root, got {c}')
+          print(c[0])
+          PY
+          )"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+      - name: Source preflight and compile-fix normalisation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          root=pathlib.Path(os.environ['PROJECT_ROOT'])
+          m=(root/'AndroidManifest.xml').read_text(errors='replace')
+          assert 'package="com.directive.v2"' in m
+          for x in ['INTERNET','ACCESS_NETWORK_STATE','ACCESS_WIFI_STATE','CHANGE_NETWORK_STATE','CHANGE_WIFI_STATE']:
+              if f'android.permission.{x}' in m: raise SystemExit('forbidden network permission '+x)
+          for x in ['READ_CALENDAR','WRITE_CALENDAR']:
+              if f'android.permission.{x}' not in m: raise SystemExit('missing '+x)
+          p=root/'src/com/directive/planner/DirectiveCalendarProviderSync.java'
+          s=p.read_text()
+          if 'Build.VERSION' in s and 'import android.os.Build;' not in s:
+              marker='package com.directive.planner;'
+              if marker not in s: raise SystemExit('calendar provider package marker missing')
+              s=s.replace(marker, marker+'\nimport android.os.Build;',1)
+              p.write_text(s)
+              print('PATCHED: missing android.os.Build import in DirectiveCalendarProviderSync.java')
+          assert 'import android.os.Build;' in p.read_text()
+          print('PASS: source preflight and deterministic compile-fix')
+          PY
+
+      - name: Assemble inherited dex
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf out && mkdir -p out/dex out/classes out/extdex out/evidence
+          idx=1
+          for d in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ "$idx" -eq 1 ]; then dex=classes.dex; else dex=classes${idx}.dex; fi
+            smali assemble "$PROJECT_ROOT/$d" -o "out/dex/$dex"
+            test -s "out/dex/$dex"
+            idx=$((idx+1))
+          done
+          echo "EXTENSION_DEX_INDEX=$idx" >> "$GITHUB_ENV"
+          sha256sum out/dex/classes*.dex > out/evidence/INHERITED_DEX_SHA256.txt
+
+      - name: Compile DIRECTIVE local extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_JAR="$ANDROID_HOME/platforms/$ANDROID_PLATFORM/android.jar"
+          mapfile -t JAVA_FILES < <(find "$PROJECT_ROOT/src" -type f -name '*.java' | sort)
+          javac -encoding UTF-8 -source 8 -target 8 -cp "$ANDROID_JAR" -d out/classes "${JAVA_FILES[@]}"
+          jar cf out/DIRECTIVE_LOCAL_EXTENSION.jar -C out/classes .
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/d8" --lib "$ANDROID_JAR" --min-api "$MIN_SDK" --output out/extdex out/DIRECTIVE_LOCAL_EXTENSION.jar
+          cp out/extdex/classes.dex "out/dex/classes${EXTENSION_DEX_INDEX}.dex"
+          strings "out/dex/classes${EXTENSION_DEX_INDEX}.dex" | grep -Fq 'Lcom/directive/planner/DirectivePlannerActivity;'
+          strings "out/dex/classes${EXTENSION_DEX_INDEX}.dex" | grep -Fq 'Lcom/directive/reminder/DirectivePersistentAlertService;'
+          strings "out/dex/classes${EXTENSION_DEX_INDEX}.dex" | grep -Fq 'Lcom/directive/reminder/DirectivePersistentAlertStopReceiver;'
+          echo PASS > out/evidence/EXTENSION_COMPILE.txt
+
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          AAPT="$BT/aapt"
+          ANDROID_JAR="$ANDROID_HOME/platforms/$ANDROID_PLATFORM/android.jar"
+          EXTRA=''
+          "$AAPT" 2>&1 | grep -q -- '--no-version-vectors' && EXTRA='--no-version-vectors' || true
+          "$AAPT" package -f -I "$ANDROID_JAR" -M "$PROJECT_ROOT/AndroidManifest.xml" -S "$PROJECT_ROOT/res" -A "$PROJECT_ROOT/assets" -F out/base.apk $EXTRA
+          test -s out/base.apk
+          for f in out/dex/classes*.dex; do
+            b="$(basename "$f")"; cp "$f" "$b"; "$AAPT" add -f out/base.apk "$b" >/dev/null; rm "$b"
+          done
+          for tree in lib kotlin META-INF; do
+            if [ -d "$PROJECT_ROOT/$tree" ]; then
+              (cd "$PROJECT_ROOT" && find "$tree" -type f -print0 | while IFS= read -r -d '' f; do "$AAPT" add -f "$GITHUB_WORKSPACE/out/base.apk" "$f" >/dev/null; done)
+            fi
+          done
+          if [ -d "$PROJECT_ROOT/unknown" ]; then
+            (cd "$PROJECT_ROOT/unknown" && find . -type f -print0 | while IFS= read -r -d '' f; do rel="${f#./}"; "$AAPT" add -f "$GITHUB_WORKSPACE/out/base.apk" "$rel" >/dev/null || true; done)
+          fi
+          unzip -t out/base.apk > out/evidence/APK_ZIP_TEST.txt
+
+      - name: Align sign and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/zipalign" -f -P 16 4 out/base.apk out/aligned.apk
+          "$BT/zipalign" -c -P 16 4 out/aligned.apk | tee out/evidence/ZIPALIGN.txt
+          keytool -genkeypair -noprompt -keystore out/test.jks -storepass android -keypass android -alias directive2github -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=DIRECTIVE 2 GitHub Test, O=NexaRenew, C=GB'
+          "$BT/apksigner" sign --ks out/test.jks --ks-key-alias directive2github --ks-pass pass:android --key-pass pass:android --out out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk out/aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APKSIGNER_VERIFY.txt
+          "$BT/aapt" dump badging out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APK_BADGING.txt
+          "$BT/aapt" dump permissions out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APK_PERMISSIONS.txt
+          grep -Fq "package: name='com.directive.v2' versionCode='8204' versionName='2.0.4'" out/evidence/APK_BADGING.txt
+          ! grep -Eq 'android.permission.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/evidence/APK_PERMISSIONS.txt
+          grep -Fq 'android.permission.READ_CALENDAR' out/evidence/APK_PERMISSIONS.txt
+          grep -Fq 'android.permission.WRITE_CALENDAR' out/evidence/APK_PERMISSIONS.txt
+          sha256sum out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/SHA256SUMS.txt
+          printf '%s\n' 'build=PASS' 'static_verification=PASS' 'signing=EPHEMERAL_GITHUB_TEST_KEY' 'android16_runtime=UNEXECUTED' 'physical_acceptance=UNEXECUTED' 'final_go=false' > out/evidence/BUILD_STATUS.txt
+
+      - name: Upload APK and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_2_2.0.4_GITHUB_TEST_v3
+          path: |
+            out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk
+            out/evidence/
+            SOURCE_ZIP_TEST.txt
+          if-no-files-found: error
+          retention-days: 30
