@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# v12 forensic gate: rerun after workflow registration so the push is observed.
 import hashlib
 import json
 import re
