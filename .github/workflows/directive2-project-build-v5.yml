@@ -1,0 +1,180 @@
+name: DIRECTIVE 2 Project Build v5
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'DIRECTIVE2_SOURCE.json'
+      - '.github/workflows/directive2-project-build-v5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TOOLS_VERSION: '35.0.0'
+  ANDROID_PLATFORM: 'android-35'
+  MIN_SDK: '21'
+  APKTOOL_VERSION: '2.12.1'
+  APKTOOL_SHA256: '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa'
+
+jobs:
+  build:
+    name: Apktool rebuild and verify DIRECTIVE 2 v5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;$ANDROID_PLATFORM" "build-tools;$BUILD_TOOLS_VERSION"
+
+      - name: Materialise exact uploaded source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/source.env
+          import json, shlex
+          d=json.load(open('DIRECTIVE2_SOURCE.json'))
+          assert d['sha256']=='78263f9236855d40e522596f21630dd134e380c55d7f3a7814caedf5bfa4d3a3'
+          print('SOURCE_URL='+shlex.quote(d['url']))
+          print('SOURCE_SHA256='+shlex.quote(d['sha256']))
+          PY
+          source /tmp/source.env
+          curl -fL --retry 5 --retry-delay 2 "$SOURCE_URL" -o source.zip
+          echo "$SOURCE_SHA256  source.zip" | sha256sum -c -
+          unzip -t source.zip > SOURCE_ZIP_TEST.txt
+          rm -rf input && mkdir input && unzip -q source.zip -d input
+          PROJECT_ROOT="$(python3 - <<'PY'
+          from pathlib import Path
+          c=[]
+          for p in Path('input').rglob('AndroidManifest.xml'):
+              r=p.parent
+              if (r/'.project').is_file() and (r/'res').is_dir() and (r/'smali').is_dir(): c.append(r)
+          if len(c)!=1: raise SystemExit(f'expected one project root, got {c}')
+          print(c[0])
+          PY
+          )"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+      - name: Normalise decoded tree and create Apktool metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,pathlib,json
+          root=pathlib.Path(os.environ['PROJECT_ROOT'])
+          m=(root/'AndroidManifest.xml').read_text(errors='replace')
+          assert 'package="com.directive.v2"' in m
+          for x in ['INTERNET','ACCESS_NETWORK_STATE','ACCESS_WIFI_STATE','CHANGE_NETWORK_STATE','CHANGE_WIFI_STATE']:
+              if f'android.permission.{x}' in m: raise SystemExit('forbidden network permission '+x)
+          for x in ['READ_CALENDAR','WRITE_CALENDAR']:
+              if f'android.permission.{x}' not in m: raise SystemExit('missing '+x)
+          # APK Builder left one editor backup file under res/, which aapt2 correctly rejects.
+          backups=list((root/'res').rglob('*.original'))
+          for p in backups: p.unlink()
+          print('Removed non-resource editor backups:', [str(p.relative_to(root)) for p in backups])
+          p=root/'src/com/directive/planner/DirectiveCalendarProviderSync.java'
+          s=p.read_text()
+          if 'Build.VERSION' in s and 'import android.os.Build;' not in s:
+              p.write_text(s.replace('package com.directive.planner;','package com.directive.planner;\nimport android.os.Build;',1))
+          meta=json.loads((root/'apktool.json').read_text())
+          def q(v):
+              if v is None:return 'null'
+              if isinstance(v,bool):return 'true' if v else 'false'
+              return json.dumps(str(v),ensure_ascii=False)
+          out=['version: '+q('2.12.1'),'apkFileName: '+q(meta.get('apkFileName','DIRECTIVE_2_2.0.4_8204.apk')),'isFrameworkApk: false']
+          uf=meta.get('UsesFramework') or {}; out+=['usesFramework:','  ids:']+[f'  - {i}' for i in uf.get('ids',[1])]+['  tag: '+q(uf.get('tag'))]
+          sdk=meta.get('sdkInfo') or {}; out+=['sdkInfo:','  minSdkVersion: '+q(sdk.get('minSdkVersion','21')),'  targetSdkVersion: '+q(sdk.get('targetSdkVersion','37'))]
+          pi=meta.get('PackageInfo') or {}; out+=['packageInfo:','  forcedPackageId: '+q(pi.get('forcedPackageId','127')),'  renameManifestPackage: '+q(pi.get('renameManifestPackage'))]
+          vi=meta.get('VersionInfo') or {}; out+=['versionInfo:','  versionCode: '+q(vi.get('versionCode','8204')),'  versionName: '+q(vi.get('versionName','2.0.4'))]
+          out+=['resourcesAreCompressed: false','sharedLibrary: false','sparseResources: '+('true' if meta.get('sparseResources',False) else 'false'),'doNotCompress:']
+          out += ['- '+q(x) for x in meta.get('doNotCompress',[])]
+          out += ['unknownFiles:']
+          out += ['  '+q(k)+': '+q(v) for k,v in sorted((meta.get('unknownFiles') or {}).items())]
+          (root/'apktool.yml').write_text('\n'.join(out)+'\n')
+          print('PASS: decoded tree normalised for Apktool 2.12.1')
+          PY
+
+      - name: Download and verify Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o apktool.jar
+          echo "$APKTOOL_SHA256  apktool.jar" | sha256sum -c -
+
+      - name: Rebuild decoded DIRECTIVE source with Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf out && mkdir -p out/evidence out/classes out/extdex
+          java -Xmx8g -jar apktool.jar b -f "$PROJECT_ROOT" -o out/DIRECTIVE_2_base_unsigned.apk 2>&1 | tee out/evidence/APKTOOL_BUILD_LOG.txt
+          test -s out/DIRECTIVE_2_base_unsigned.apk
+          unzip -t out/DIRECTIVE_2_base_unsigned.apk > out/evidence/APKTOOL_BASE_ZIP_TEST.txt
+
+      - name: Compile and inject DIRECTIVE extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_JAR="$ANDROID_HOME/platforms/$ANDROID_PLATFORM/android.jar"
+          mapfile -t JAVA_FILES < <(find "$PROJECT_ROOT/src" -type f -name '*.java' | sort)
+          javac -encoding UTF-8 -source 8 -target 8 -cp "$ANDROID_JAR" -d out/classes "${JAVA_FILES[@]}"
+          jar cf out/DIRECTIVE_LOCAL_EXTENSION.jar -C out/classes .
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/d8" --lib "$ANDROID_JAR" --min-api "$MIN_SDK" --output out/extdex out/DIRECTIVE_LOCAL_EXTENSION.jar
+          strings out/extdex/classes.dex | grep -Fq 'Lcom/directive/planner/DirectivePlannerActivity;'
+          strings out/extdex/classes.dex | grep -Fq 'Lcom/directive/reminder/DirectivePersistentAlertService;'
+          python3 - <<'PY'
+          import zipfile,re,shutil,pathlib
+          src=pathlib.Path('out/DIRECTIVE_2_base_unsigned.apk'); dst=pathlib.Path('out/DIRECTIVE_2_with_extension.apk'); ext=pathlib.Path('out/extdex/classes.dex')
+          shutil.copy2(src,dst)
+          with zipfile.ZipFile(dst,'a') as z:
+              nums=[]
+              for n in z.namelist():
+                  m=re.fullmatch(r'classes(\d*)\.dex',n)
+                  if m: nums.append(int(m.group(1) or '1'))
+              name=f'classes{max(nums)+1}.dex'
+              z.writestr(name,ext.read_bytes(),compress_type=zipfile.ZIP_STORED)
+              print('Injected',name)
+          PY
+
+      - name: Align test-sign and verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$BT/zipalign" -f -P 16 4 out/DIRECTIVE_2_with_extension.apk out/DIRECTIVE_2_aligned.apk
+          "$BT/zipalign" -c -P 16 4 out/DIRECTIVE_2_aligned.apk | tee out/evidence/ZIPALIGN.txt
+          keytool -genkeypair -noprompt -keystore out/test.jks -storepass android -keypass android -alias directive2github -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=DIRECTIVE 2 GitHub Test, O=NexaRenew, C=GB'
+          "$BT/apksigner" sign --ks out/test.jks --ks-key-alias directive2github --ks-pass pass:android --key-pass pass:android --out out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk out/DIRECTIVE_2_aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APKSIGNER_VERIFY.txt
+          "$BT/aapt" dump badging out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APK_BADGING.txt
+          "$BT/aapt" dump permissions out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/APK_PERMISSIONS.txt
+          grep -Fq "package: name='com.directive.v2' versionCode='8204' versionName='2.0.4'" out/evidence/APK_BADGING.txt
+          ! grep -Eq 'android.permission.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE|CHANGE_NETWORK_STATE|CHANGE_WIFI_STATE)' out/evidence/APK_PERMISSIONS.txt
+          grep -Fq 'android.permission.READ_CALENDAR' out/evidence/APK_PERMISSIONS.txt
+          grep -Fq 'android.permission.WRITE_CALENDAR' out/evidence/APK_PERMISSIONS.txt
+          sha256sum out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk | tee out/evidence/SHA256SUMS.txt
+          printf '%s\n' 'build=PASS' 'static_verification=PASS' 'signing=EPHEMERAL_GITHUB_TEST_KEY' 'android16_runtime=UNEXECUTED' 'physical_acceptance=UNEXECUTED' 'final_go=false' > out/evidence/BUILD_STATUS.txt
+
+      - name: Upload APK and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_2_2.0.4_GITHUB_TEST_v5
+          path: |
+            out/DIRECTIVE_2_2.0.4_GITHUB_TEST.apk
+            out/evidence/
+            SOURCE_ZIP_TEST.txt
+          if-no-files-found: error
+          retention-days: 30
