@@ -1,0 +1,96 @@
+name: DIRECTIVE 3 macOS ARM Android 16 Crash Capture v10
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - '.github/workflows/directive3-macos-arm-runtime-v10.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build candidate
+        shell: bash
+        run: |
+          chmod +x support/directive3_install_safe_build.sh
+          support/directive3_install_safe_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: directive3-candidate
+          path: out-v8/DIRECTIVE_3_3.0.0_INSTALL_SAFE_TEST.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  runtime:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Record host architecture
+        shell: bash
+        run: |
+          uname -a
+          uname -m | tee host_arch.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: directive3-candidate
+          path: candidate
+      - name: Android 16 ARM64 runtime and crash capture
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: arm64-v8a
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -eu
+            mkdir -p runtime
+            APK=candidate/DIRECTIVE_3_3.0.0_INSTALL_SAFE_TEST.apk
+            adb wait-for-device
+            adb shell getprop ro.build.version.sdk | tee runtime/API_LEVEL.txt
+            adb shell getprop ro.product.cpu.abi | tee runtime/ABI.txt
+            adb install "$APK" 2>&1 | tee runtime/ADB_INSTALL.txt
+            adb logcat -c
+            adb shell am force-stop com.directive.v3 || true
+            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.directive.v3 2>&1 | tee runtime/COLD_LAUNCH.txt || true
+            sleep 12
+            adb shell pidof com.directive.v3 > runtime/PID.txt || true
+            adb logcat -d -v threadtime > runtime/LOGCAT.txt
+            adb shell dumpsys activity exit-info com.directive.v3 > runtime/EXIT_INFO.txt || true
+            grep -n -E -A 120 -B 20 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v3|Unable to create application|Unable to start activity|NoClassDefFoundError|ClassNotFoundException|UnsatisfiedLinkError|SecurityException|IllegalStateException|Resources\$NotFoundException' runtime/LOGCAT.txt > runtime/CRASH_EXCERPT.txt || true
+            if [ -s runtime/PID.txt ]; then echo 'PROCESS_ALIVE_AFTER_12S=YES' | tee runtime/STATUS.txt; else echo 'PROCESS_ALIVE_AFTER_12S=NO' | tee runtime/STATUS.txt; fi
+            cat runtime/CRASH_EXCERPT.txt || true
+            test -s runtime/PID.txt
+      - name: Upload crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_3_MACOS_ARM_ANDROID16_CRASH_v10
+          path: |
+            host_arch.txt
+            runtime/
+          if-no-files-found: warn
+          retention-days: 14
