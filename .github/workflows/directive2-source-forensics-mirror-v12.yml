@@ -1,0 +1,42 @@
+name: DIRECTIVE 2 Source Forensics Mirror v12
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive2-github-build
+    paths:
+      - '.github/workflows/directive2-source-forensics-mirror-v12.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Acquire and verify exact build input
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/directive_source.env
+          import json, shlex
+          d=json.load(open('DIRECTIVE2_SOURCE.json'))
+          print('SOURCE_URL='+shlex.quote(d['url']))
+          print('SOURCE_SHA256='+shlex.quote(d['sha256']))
+          print('SOURCE_FILENAME='+shlex.quote(d['filename']))
+          PY
+          source /tmp/directive_source.env
+          mkdir -p mirror
+          curl -fL --retry 5 --retry-delay 2 "$SOURCE_URL" -o "mirror/$SOURCE_FILENAME"
+          echo "$SOURCE_SHA256  mirror/$SOURCE_FILENAME" | sha256sum -c - | tee mirror/SOURCE_SHA_VERIFY.txt
+          unzip -t "mirror/$SOURCE_FILENAME" > mirror/SOURCE_ZIP_TEST.txt
+      - name: Upload exact source for local forensic analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_2_EXACT_BUILD_INPUT_v12
+          path: mirror/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
