@@ -1,0 +1,32 @@
+name: DIRECTIVE 8 Targeted Startup Forensics v19
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive8_targeted_startup_forensics.sh'
+      - '.github/workflows/directive8-targeted-startup-forensics-v19.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect exact startup package/icon/crash paths
+        shell: bash
+        run: |
+          chmod +x support/directive8_targeted_startup_forensics.sh
+          support/directive8_targeted_startup_forensics.sh
+      - name: Upload targeted startup forensics
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_8_TARGETED_STARTUP_FORENSICS_v19
+          path: out-d8-targeted/TARGETED_STARTUP_FORENSICS.txt
+          if-no-files-found: error
+          retention-days: 30
