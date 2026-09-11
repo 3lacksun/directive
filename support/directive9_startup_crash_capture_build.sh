@@ -19,16 +19,17 @@ for old,new in (
  ('directive8test','directive9test'),
  ('out-v8','out-v9'),
  ('DIRECTIVE8_','DIRECTIVE9_'),
- ('DIRECTIVE8_STATUS','DIRECTIVE9_STATUS'),
 ): src=src.replace(old,new)
-needle='python3 support/patch_directive_startup_icon_process_exit.py "$PROJECT_ROOT" | tee out-v9/evidence/STARTUP_ICON_PROCESS_EXIT_REMEDIATION.txt\ncp "$PROJECT_ROOT/DIRECTIVE_STARTUP_ICON_PROCESS_EXIT_REMEDIATION_REPORT.json" out-v9/evidence/\n'
-if src.count(needle)!=1: raise SystemExit(f'crash-capture insertion point count={src.count(needle)}')
-insert=needle+'python3 support/patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 9 | tee out-v9/evidence/STARTUP_CRASH_CAPTURE.txt\ncp "$PROJECT_ROOT/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json" out-v9/evidence/\n'
-src=src.replace(needle,insert,1)
-# D9 is explicitly a diagnostic runtime candidate, not a claimed fix/GO.
+# Add crash capture to the source-remediation block embedded in the D8 generator.
+anchor='cp "$PROJECT_ROOT/DIRECTIVE_STARTUP_ICON_PROCESS_EXIT_REMEDIATION_REPORT.json" out-v9/evidence/\n'
+if src.count(anchor)!=1: raise SystemExit(f'crash-capture insertion anchor count={src.count(anchor)}')
+addition=anchor+'python3 support/patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 9 | tee out-v9/evidence/STARTUP_CRASH_CAPTURE.txt\ncp "$PROJECT_ROOT/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json" out-v9/evidence/\n'
+src=src.replace(anchor,addition,1)
 src=src.replace("'physical_samsung_android16_acceptance=UNEXECUTED'", "'physical_samsung_android16_acceptance=UNEXECUTED_D9;D8=FAIL'")
-src=src.replace("'android16_emulator_runtime=UNVERIFIABLE'", "'android16_emulator_runtime=UNVERIFIABLE'")
-src=src.replace("echo 'PASS: DIRECTIVE 9 startup-process-exit remediated APK built and statically verified'", "grep -Fq '\"startup_throwable_rethrown\": true' out-v9/evidence/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json\ngrep -Fq '\"authentication_licensing_entitlement_logic_changed\": false' out-v9/evidence/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json\necho 'PASS: DIRECTIVE 9 diagnostic startup crash-capture APK built and statically verified; FINAL_GO=false'")
+old_echo="echo 'PASS: DIRECTIVE 9 startup-process-exit remediated APK built and statically verified'"
+new_echo="grep -Fq '\"startup_throwable_rethrown\": true' out-v9/evidence/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json\ngrep -Fq '\"authentication_licensing_entitlement_logic_changed\": false' out-v9/evidence/DIRECTIVE_STARTUP_CRASH_CAPTURE_REPORT.json\necho 'PASS: DIRECTIVE 9 diagnostic startup crash-capture APK built and statically verified; FINAL_GO=false'"
+if old_echo not in src: raise SystemExit('D9 terminal build message anchor missing')
+src=src.replace(old_echo,new_echo,1)
 Path(sys.argv[2]).write_text(src,encoding='utf-8')
 PY
 chmod +x "$GEN"
@@ -36,7 +37,6 @@ bash "$GEN"
 
 APK=out-v9/DIRECTIVE_9_9.0.0_INSTALL_SAFE_TEST.apk
 test -s "$APK"
-# Crash recorder must be present in compiled DEX and must not change the no-network boundary.
 for dex in classes.dex classes2.dex classes3.dex classes4.dex classes5.dex classes6.dex; do unzip -p "$APK" "$dex" 2>/dev/null || true; done | strings > out-v9/evidence/APK_D9_DEX_STRINGS.txt
 grep -Fq 'DIRECTIVE_STARTUP_CRASH' out-v9/evidence/APK_D9_DEX_STRINGS.txt
 grep -Fq 'DIRECTIVE_9_CRASH_' out-v9/evidence/APK_D9_DEX_STRINGS.txt
