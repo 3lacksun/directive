@@ -1,0 +1,32 @@
+name: DIRECTIVE 8 Startup Source Forensics v18
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive8_startup_forensics.sh'
+      - '.github/workflows/directive8-startup-forensics-v18.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+
+permissions:
+  contents: read
+
+jobs:
+  forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect exact authoritative startup source
+        shell: bash
+        run: |
+          chmod +x support/directive8_startup_forensics.sh
+          support/directive8_startup_forensics.sh
+      - name: Upload startup forensics
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_8_STARTUP_SOURCE_FORENSICS_v18
+          path: out-d8-forensics/STARTUP_FORENSICS.txt
+          if-no-files-found: error
+          retention-days: 30
