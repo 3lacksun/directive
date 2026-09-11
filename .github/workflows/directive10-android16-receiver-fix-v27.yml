@@ -1,0 +1,23 @@
+name: DIRECTIVE 10 Android 16 Receiver Fix v27
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/patch_directive_android14_receiver_flags.py'
+      - 'support/directive10_android16_receiver_fix_build.sh'
+      - '.github/workflows/directive10-android16-receiver-fix-v27.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and statically verify DIRECTIVE 10
+        run: bash support/directive10_android16_receiver_fix_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_10_10.0.0_ANDROID16_RECEIVER_FIX_v27
+          path: out-v10/
+          if-no-files-found: error
