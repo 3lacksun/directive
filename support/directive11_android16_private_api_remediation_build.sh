@@ -55,10 +55,12 @@ grep -Fq "package: name='com.directive.v11' versionCode='9100' versionName='11.0
 grep -Fq "application-label:'DIRECTIVE 11'" out-v11/evidence/APK_BADGING.txt
 grep -Fq '16K_ALIGNMENT=PASS' out-v11/evidence/ELF_16K_ALIGNMENT.txt
 
-# Verify exact source tree compiled into the APK contains the API 36 compatibility branch.
-grep -Fq ':directive_android16_skip_activitythread_hook' "$PROJECT_ROOT/smali_classes2/com/ticktick/task/TickTickApplicationBase.smali"
-grep -Fq ':directive_android16_legacy_activitythread_hook' "$PROJECT_ROOT/smali_classes2/com/ticktick/task/TickTickApplicationBase.smali"
-grep -Fq ':directive_android16_nonfatal_abort' "$PROJECT_ROOT/smali_classes4/com/ticktick/task/utils/ActivityThreadCallback.smali"
+# The compatibility patch and exact source-tree checks execute before assembly in the
+# generated build.  Recheck the persisted evidence copied from that exact tree here.
+grep -Fq '"activitythread_private_hook_disabled_on_api36_plus": true' out-v11/evidence/DIRECTIVE_ANDROID16_STARTUP_COMPAT_REPORT.json
+grep -Fq '"activitythread_abort_process_kill_disabled_on_api36_plus": true' out-v11/evidence/DIRECTIVE_ANDROID16_STARTUP_COMPAT_REPORT.json
+grep -Fq '"legacy_hook_preserved_through_api35": true' out-v11/evidence/DIRECTIVE_ANDROID16_STARTUP_COMPAT_REPORT.json
+grep -Fq '"authentication_licensing_entitlement_logic_changed": false' out-v11/evidence/DIRECTIVE_ANDROID16_STARTUP_COMPAT_REPORT.json
 
 printf '%s\n' \
   'candidate=DIRECTIVE 11' \
