@@ -12,10 +12,14 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: directive12-android16-arm64-runtime
+  cancel-in-progress: true
+
 jobs:
   runtime-probe:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -66,18 +70,22 @@ jobs:
             > "$BOOT_LOG" 2>&1 &
           EMU_PID=$!
           echo "$EMU_PID" > artifact/EMULATOR_PID.txt
-          adb wait-for-device
           boot=''
-          for i in $(seq 1 120); do
-            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-            [ "$boot" = '1' ] && break
+          adb_seen='false'
+          for i in $(seq 1 90); do
             if ! kill -0 "$EMU_PID" 2>/dev/null; then
               echo 'EMULATOR_EXITED_BEFORE_BOOT' >&2
               cat "$BOOT_LOG" >&2 || true
               exit 2
             fi
+            if adb get-state >/dev/null 2>&1; then
+              adb_seen='true'
+              boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              [ "$boot" = '1' ] && break
+            fi
             sleep 2
           done
+          printf 'adb_seen=%s\nboot_completed=%s\n' "$adb_seen" "$boot" | tee artifact/ANDROID16_BOOT_PROBE_RESULT.txt
           if [ "$boot" != '1' ]; then
             echo 'ANDROID16_ARM64_EMULATOR_BOOT_TIMEOUT' >&2
             cat "$BOOT_LOG" >&2 || true
