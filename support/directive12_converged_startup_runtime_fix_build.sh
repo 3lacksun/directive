@@ -71,6 +71,23 @@ grep -Fq '"inherited_ticktick_class_namespace_preserved": true' out-v12/evidence
 '''
 src = src.replace(final_anchor, final_addition, 1)
 
+# D11 records PROJECT_ROOT while the decoded tree is under out-v8, then moves the
+# entire output tree. Rebase that recorded relative path before post-move source
+# gates; do not weaken or skip the style checks.
+project_anchor = '''PROJECT_ROOT="$(sed -n 's/^PROJECT_ROOT=//p' out-v12/evidence/PROJECT_ROOT.txt)"
+test -n "$PROJECT_ROOT"
+'''
+if src.count(project_anchor) != 1:
+    raise SystemExit(f'D12 post-move PROJECT_ROOT anchor count={src.count(project_anchor)}')
+project_rebased = project_anchor + '''case "$PROJECT_ROOT" in
+  out-v8/*) PROJECT_ROOT="out-v12/${PROJECT_ROOT#out-v8/}" ;;
+  out-v12/*) : ;;
+  *) echo "Unexpected PROJECT_ROOT after D12 output move: $PROJECT_ROOT" >&2; exit 1 ;;
+esac
+test -d "$PROJECT_ROOT"
+'''
+src = src.replace(project_anchor, project_rebased, 1)
+
 # Correct the final disposition to describe the assembled candidate, not the
 # intermediate capture-instrumentation state.
 src = src.replace(
@@ -97,4 +114,4 @@ grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRE
 
 sha256sum "$APK" | tee out-v12/evidence/DIRECTIVE12_SHA256_FINAL.txt
 echo 'PASS: DIRECTIVE 12 converged source remediation and static package gates complete; Android 16 runtime still required; FINAL_GO=false'
-# workflow trigger marker v35
+# workflow trigger marker v36
