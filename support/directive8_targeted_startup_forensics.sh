@@ -52,7 +52,7 @@ around(Path('smali_classes4/yf/t.smali'),'System;->exit',200,100)
 
 # App icon configuration enum/class and every direct caller of yf/t.a(Context,s,Z)
 for p in root.rglob('yf/s.smali'):
- print('\n'+'='*90+'\nFULL FILE',p.relative_to(root)+'\n'+'='*90)
+ print('\n'+'='*90+'\nFULL FILE',str(p.relative_to(root))+'\n'+'='*90)
  print(p.read_text(encoding='utf-8',errors='replace'))
 
 needle='Lyf/t;->a(Landroid/content/Context;Lyf/s;Z)V'
