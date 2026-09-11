@@ -78,7 +78,8 @@ src = src.replace(
 Path(sys.argv[2]).write_text(src, encoding='utf-8')
 PY
 chmod +x "$GEN"
-bash "$GEN"
+# Trace the inherited post-build acceptance gates until the converged wrapper is stable.
+bash -x "$GEN"
 
 APK=out-v12/DIRECTIVE_12_12.0.0_INSTALL_SAFE_TEST.apk
 test -s "$APK"
@@ -94,4 +95,4 @@ grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRE
 
 sha256sum "$APK" | tee out-v12/evidence/DIRECTIVE12_SHA256_FINAL.txt
 echo 'PASS: DIRECTIVE 12 converged source remediation and static package gates complete; Android 16 runtime still required; FINAL_GO=false'
-# workflow trigger marker v33
+# workflow trigger marker v34
