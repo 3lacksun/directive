@@ -23,7 +23,6 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -44,10 +43,7 @@ jobs:
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            'platform-tools' \
-            'emulator' \
-            'platforms;android-36' \
-            'build-tools;35.0.0' \
+            'platform-tools' 'emulator' 'platforms;android-36' 'build-tools;35.0.0' \
             'system-images;android-36;google_apis;x86_64'
 
       - name: Build combined candidate
@@ -65,74 +61,51 @@ jobs:
           EVID=out-v8/runtime-evidence
           mkdir -p "$EVID" "$ANDROID_AVD_HOME"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-
-          printf 'no\n' | avdmanager create avd \
-            --force \
-            --name directive_api36 \
+          printf 'no\n' | avdmanager create avd --force --name directive_api36 \
             --package 'system-images;android-36;google_apis;x86_64' \
             --path "$ANDROID_AVD_HOME/directive_api36.avd"
-
           emulator -list-avds | tee "$EVID/AVD_LIST.txt"
           grep -Fxq 'directive_api36' "$EVID/AVD_LIST.txt"
           test -f "$ANDROID_AVD_HOME/directive_api36.ini"
           test -d "$ANDROID_AVD_HOME/directive_api36.avd"
           cp "$ANDROID_AVD_HOME/directive_api36.ini" "$EVID/directive_api36.ini"
           cp "$ANDROID_AVD_HOME/directive_api36.avd/config.ini" "$EVID/directive_api36_config.ini"
-
           if [ -e /dev/kvm ]; then
             sudo chmod 666 /dev/kvm
             emulator -accel-check | tee "$EVID/ACCEL_CHECK.txt" || true
           else
             echo '/dev/kvm unavailable' | tee "$EVID/ACCEL_CHECK.txt"
           fi
-
-          nohup emulator \
-            -avd directive_api36 \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -no-metrics \
-            -accel on \
-            -gpu swiftshader_indirect \
-            -camera-back none \
-            -camera-front none \
-            > "$EVID/EMULATOR_STDOUT.txt" 2>&1 &
+          nohup emulator -avd directive_api36 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -no-metrics -accel on -gpu swiftshader_indirect \
+            -camera-back none -camera-front none > "$EVID/EMULATOR_STDOUT.txt" 2>&1 &
           echo $! > "$EVID/EMULATOR_PID.txt"
-
           if ! timeout 180s adb wait-for-device; then
             adb devices -l > "$EVID/ADB_DEVICES_ON_TIMEOUT.txt" 2>&1 || true
             ps auxww > "$EVID/PROCESS_LIST_ON_TIMEOUT.txt" 2>&1 || true
             tail -n 300 "$EVID/EMULATOR_STDOUT.txt" || true
-            echo 'EMULATOR_ADB_TIMEOUT' > "$EVID/BOOT_STATUS.txt"
+            echo EMULATOR_ADB_TIMEOUT > "$EVID/BOOT_STATUS.txt"
             exit 1
           fi
-
           booted=false
           for i in $(seq 1 90); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-              booted=true
-              break
-            fi
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted=true; break; fi
             sleep 2
           done
           if [ "$booted" != true ]; then
-            adb devices -l > "$EVID/ADB_DEVICES_ON_BOOT_TIMEOUT.txt" 2>&1 || true
             adb shell getprop > "$EVID/DEVICE_PROPERTIES_ON_BOOT_TIMEOUT.txt" 2>&1 || true
             tail -n 300 "$EVID/EMULATOR_STDOUT.txt" || true
-            echo 'EMULATOR_BOOT_TIMEOUT' > "$EVID/BOOT_STATUS.txt"
+            echo EMULATOR_BOOT_TIMEOUT > "$EVID/BOOT_STATUS.txt"
             exit 1
           fi
-
-          echo 'EMULATOR_BOOT_PASS' > "$EVID/BOOT_STATUS.txt"
+          echo EMULATOR_BOOT_PASS > "$EVID/BOOT_STATUS.txt"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
           adb shell getprop > "$EVID/DEVICE_PROPERTIES.txt"
           adb shell getprop ro.build.version.release > "$EVID/ANDROID_RELEASE.txt"
           adb shell getprop ro.build.version.sdk > "$EVID/ANDROID_SDK.txt"
-          adb shell wm size > "$EVID/DISPLAY_SIZE.txt"
-          test "$(tr -d '\r\n ' < "$EVID/ANDROID_SDK.txt")" = '36'
+          test "$(tr -d '\r\n ' < "$EVID/ANDROID_SDK.txt")" = 36
 
       - name: Install and cold-launch twice
         shell: bash
@@ -141,19 +114,14 @@ jobs:
           EVID=out-v8/runtime-evidence
           APK=out-v8/DIRECTIVE_6_6.0.0_INSTALL_SAFE_TEST.apk
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
-
           adb install -r "$APK" | tee "$EVID/ADB_INSTALL.txt"
-          grep -Fq 'Success' "$EVID/ADB_INSTALL.txt"
+          grep -Fq Success "$EVID/ADB_INSTALL.txt"
           adb shell pm path com.directive.v6 | tee "$EVID/PACKAGE_PATH.txt"
-          grep -Fq 'package:' "$EVID/PACKAGE_PATH.txt"
-          adb shell cmd package resolve-activity --brief \
-            -a android.intent.action.MAIN \
-            -c android.intent.category.LAUNCHER \
-            com.directive.v6 | tee "$EVID/RESOLVED_LAUNCHER.txt" || true
+          adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN \
+            -c android.intent.category.LAUNCHER com.directive.v6 | tee "$EVID/RESOLVED_LAUNCHER.txt" || true
 
           capture_runtime() {
-            n="$1"
-            phase="$2"
+            n="$1"; phase="$2"
             adb shell dumpsys activity activities > "$EVID/LAUNCH_${n}_${phase}_ACTIVITIES.txt" 2>&1 || true
             adb shell dumpsys activity processes > "$EVID/LAUNCH_${n}_${phase}_PROCESSES.txt" 2>&1 || true
             adb shell dumpsys package com.directive.v6 > "$EVID/LAUNCH_${n}_${phase}_PACKAGE.txt" 2>&1 || true
@@ -162,51 +130,63 @@ jobs:
             adb shell dumpsys dropbox --print SYSTEM_TOMBSTONE > "$EVID/LAUNCH_${n}_${phase}_DROPBOX_TOMBSTONE.txt" 2>&1 || true
           }
 
+          print_fatal_context() {
+            n="$1"; file="$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt"
+            python3 - "$file" "$EVID/LAUNCH_${n}_FATAL_CONTEXT.txt" <<'PY'
+          import sys
+          src, dst = sys.argv[1:]
+          lines = open(src, encoding='utf-8', errors='replace').read().splitlines()
+          hits = [i for i, line in enumerate(lines) if 'FATAL EXCEPTION' in line or ('AndroidRuntime' in line and 'Process:' in line)]
+          if not hits:
+              text = 'NO_FATAL_CONTEXT_FOUND\n'
+          else:
+              a = max(0, hits[0] - 12)
+              b = min(len(lines), hits[0] + 140)
+              text = '\n'.join(lines[a:b]) + '\n'
+          open(dst, 'w', encoding='utf-8').write(text)
+          print('===== DIRECTIVE FATAL CONTEXT BEGIN =====')
+          print(text, end='')
+          print('===== DIRECTIVE FATAL CONTEXT END =====')
+          PY
+          }
+
           run_launch() {
             n="$1"
             adb shell am force-stop com.directive.v6
             sleep 1
             adb logcat -c
-            adb shell monkey -p com.directive.v6 -c android.intent.category.LAUNCHER 1 \
-              | tee "$EVID/LAUNCH_${n}_MONKEY.txt"
-
+            adb shell monkey -p com.directive.v6 -c android.intent.category.LAUNCHER 1 | tee "$EVID/LAUNCH_${n}_MONKEY.txt"
             sleep 2
             pid2="$(adb shell pidof com.directive.v6 2>/dev/null | tr -d '\r' || true)"
             printf '%s\n' "$pid2" | tee "$EVID/LAUNCH_${n}_PID_2S.txt"
             if [ -z "$pid2" ]; then
-              capture_runtime "$n" 'FAIL_2S'
-              echo "PROCESS_DEAD_BY_2S" > "$EVID/LAUNCH_${n}_RESULT.txt"
+              capture_runtime "$n" FAIL_2S
+              echo PROCESS_DEAD_BY_2S > "$EVID/LAUNCH_${n}_RESULT.txt"
               return 21
             fi
-
             sleep 8
             pid10="$(adb shell pidof com.directive.v6 2>/dev/null | tr -d '\r' || true)"
             printf '%s\n' "$pid10" | tee "$EVID/LAUNCH_${n}_PID_10S.txt"
-            capture_runtime "$n" 'AT_10S'
-
-            if [ -z "$pid10" ]; then
-              echo "PROCESS_DEAD_BEFORE_10S" > "$EVID/LAUNCH_${n}_RESULT.txt"
-              grep -E -i 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v6|has died|Force finishing|SIGABRT|SIGSEGV|UnsatisfiedLinkError|SecurityException|IllegalStateException|RuntimeException|ExceptionInInitializerError|NoClassDefFoundError|ClassNotFoundException' \
-                "$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt" \
-                | tail -n 250 \
-                | tee "$EVID/LAUNCH_${n}_CRASH_EXTRACT.txt" || true
-              return 22
-            fi
-
-            if grep -E 'FATAL EXCEPTION|Process: com\.directive\.v6.*has died|Force finishing activity.*com\.directive\.v6' "$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt"; then
-              echo "FATAL_RUNTIME_SIGNATURE" > "$EVID/LAUNCH_${n}_RESULT.txt"
+            capture_runtime "$n" AT_10S
+            if grep -q 'FATAL EXCEPTION' "$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt"; then
+              print_fatal_context "$n"
+              echo FATAL_RUNTIME_SIGNATURE > "$EVID/LAUNCH_${n}_RESULT.txt"
               return 23
             fi
-
-            echo "PASS_PROCESS_SURVIVED_10S" > "$EVID/LAUNCH_${n}_RESULT.txt"
+            if [ -z "$pid10" ]; then
+              echo PROCESS_DEAD_BEFORE_10S > "$EVID/LAUNCH_${n}_RESULT.txt"
+              return 22
+            fi
+            if [ "$pid2" != "$pid10" ]; then
+              echo "PROCESS_RESTARTED_${pid2}_TO_${pid10}" | tee "$EVID/LAUNCH_${n}_RESULT.txt"
+              return 24
+            fi
+            echo PASS_PROCESS_SURVIVED_10S > "$EVID/LAUNCH_${n}_RESULT.txt"
           }
 
           status=0
           run_launch 1 || status=$?
-          if [ "$status" -eq 0 ]; then
-            run_launch 2 || status=$?
-          fi
-
+          if [ "$status" -eq 0 ]; then run_launch 2 || status=$?; fi
           if [ "$status" -ne 0 ]; then
             cat > "$EVID/RUNTIME_STATUS.txt" <<EOF
           emulator_api=36
@@ -218,13 +198,13 @@ jobs:
           EOF
             exit "$status"
           fi
-
           cat > "$EVID/RUNTIME_STATUS.txt" <<'EOF'
           emulator_api=36
           package=com.directive.v6
           runtime_status=PASS
           cold_launch_1_process_survived_10s=PASS
           cold_launch_2_process_survived_10s=PASS
+          process_continuity=PASS
           fatal_runtime_signature=NOT_DETECTED
           samsung_physical_android16_acceptance=UNEXECUTED
           final_go=false
