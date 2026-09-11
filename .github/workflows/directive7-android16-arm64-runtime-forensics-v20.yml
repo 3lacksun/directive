@@ -1,0 +1,165 @@
+name: DIRECTIVE 7 Android 16 ARM64 Runtime Forensics v20
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - '.github/workflows/directive7-android16-arm64-runtime-forensics-v20.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  android16-runtime-forensics:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record runner architecture
+        shell: bash
+        run: |
+          mkdir -p runtime-evidence
+          {
+            uname -a
+            uname -m
+            sw_vers || true
+            echo "ANDROID_HOME=${ANDROID_HOME:-}"
+            sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+          } | tee runtime-evidence/RUNNER_ENV.txt
+
+      - name: Download authoritative D7 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DIRECTIVE_7_7.0.0_PROVIDER_AUTHORITY_FIX_v16
+          path: d7-artifact
+          github-token: ${{ github.token }}
+          repository: 3lacksun/directive
+          run-id: 34569031865
+
+      - name: Resolve D7 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          find d7-artifact -maxdepth 3 -type f -print | tee runtime-evidence/D7_ARTIFACT_FILES.txt
+          APK="$(find d7-artifact -type f -name 'DIRECTIVE_7_7.0.0_INSTALL_SAFE_TEST.apk' -print -quit)"
+          test -n "$APK" && test -s "$APK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          shasum -a 256 "$APK" | tee runtime-evidence/D7_APK_SHA256.txt
+          grep -Fq '862ac5af9662037384d625c4275fc3b7c2d4e08bdbc86db2f0e5b2832c4ce1e9' runtime-evidence/D7_APK_SHA256.txt
+
+      - name: Prepare Android 16 ARM64 emulator
+        id: emulator_setup
+        shell: bash
+        run: |
+          set +e
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          if [ ! -x "$AVDMANAGER" ]; then
+            AVDMANAGER="$(command -v avdmanager)"
+          fi
+          {
+            echo "uname_m=$(uname -m)"
+            echo "sdkmanager=$SDKMANAGER"
+            "$SDKMANAGER" --list_installed || true
+          } > runtime-evidence/SDK_BEFORE.txt 2>&1
+          yes | "$SDKMANAGER" --licenses > runtime-evidence/SDK_LICENSES.txt 2>&1 || true
+          "$SDKMANAGER" 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;arm64-v8a' > runtime-evidence/SDK_INSTALL.txt 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "INFRA_BLOCKER: Android 16 arm64-v8a system image/emulator install failed rc=$rc" | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          rm -rf "$HOME/.android/avd/directive_api36.avd" "$HOME/.android/avd/directive_api36.ini"
+          echo no | "$AVDMANAGER" create avd --force -n directive_api36 -k 'system-images;android-36;google_apis;arm64-v8a' --device 'pixel_6' > runtime-evidence/AVD_CREATE.txt 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "INFRA_BLOCKER: Android 16 ARM64 AVD creation failed rc=$rc" | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Boot Android 16 ARM64 emulator
+        if: steps.emulator_setup.outputs.ready == 'true'
+        id: emulator_boot
+        shell: bash
+        run: |
+          set +e
+          EMULATOR="${ANDROID_HOME}/emulator/emulator"
+          if [ ! -x "$EMULATOR" ]; then EMULATOR="$(command -v emulator)"; fi
+          "$EMULATOR" @directive_api36 -no-window -no-audio -no-snapshot -wipe-data -no-boot-anim -gpu swiftshader_indirect > runtime-evidence/EMULATOR_STDOUT.txt 2>&1 &
+          echo $! > runtime-evidence/EMULATOR_PID.txt
+          booted=false
+          for i in $(seq 1 180); do
+            adb devices > runtime-evidence/ADB_DEVICES.txt 2>&1 || true
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=true
+              break
+            fi
+            sleep 2
+          done
+          adb shell getprop > runtime-evidence/DEVICE_GETPROP.txt 2>&1 || true
+          if [ "$booted" != true ]; then
+            echo 'INFRA_BLOCKER: Android 16 ARM64 emulator did not complete boot' | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo "booted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "booted=true" >> "$GITHUB_OUTPUT"
+
+      - name: Reproduce D7 startup and capture crash
+        if: steps.emulator_boot.outputs.booted == 'true'
+        shell: bash
+        run: |
+          set +e
+          adb logcat -c
+          adb install -r "$APK" > runtime-evidence/ADB_INSTALL.txt 2>&1
+          install_rc=$?
+          if [ $install_rc -ne 0 ]; then
+            echo "RUNTIME_SETUP_FAIL: adb install rc=$install_rc" | tee runtime-evidence/RUNTIME_STATUS.txt
+            adb logcat -d -v threadtime > runtime-evidence/LOGCAT_FULL.txt 2>&1 || true
+            exit 0
+          fi
+          adb shell am force-stop com.directive.v7 || true
+          adb logcat -c
+          date -u +%FT%TZ > runtime-evidence/LAUNCH_UTC.txt
+          adb shell monkey -p com.directive.v7 -c android.intent.category.LAUNCHER 1 > runtime-evidence/LAUNCH_MONKEY.txt 2>&1
+          sleep 15
+          adb shell pidof com.directive.v7 > runtime-evidence/PIDOF.txt 2>&1
+          adb shell dumpsys activity activities > runtime-evidence/DUMPSYS_ACTIVITIES.txt 2>&1 || true
+          adb shell dumpsys activity exit-info com.directive.v7 > runtime-evidence/DUMPSYS_EXIT_INFO.txt 2>&1 || true
+          adb shell dumpsys dropbox --print > runtime-evidence/DROPBOX.txt 2>&1 || true
+          adb logcat -d -v threadtime > runtime-evidence/LOGCAT_FULL.txt 2>&1 || true
+          grep -E -i -n -C 12 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v7|com\.directive\.v7|SecurityException|IllegalArgumentException|RuntimeException|UnsatisfiedLinkError|ClassNotFoundException|NoClassDefFoundError|SQLiteException|Resources\$NotFoundException' runtime-evidence/LOGCAT_FULL.txt > runtime-evidence/LOGCAT_CRASH_FOCUS.txt 2>&1 || true
+          if [ -s runtime-evidence/PIDOF.txt ]; then
+            echo 'RUNTIME_OBSERVATION: process remains alive 15s after launcher invocation; this is not sufficient for FINAL_GO.' | tee runtime-evidence/RUNTIME_STATUS.txt
+          else
+            echo 'RUNTIME_FAIL: process not alive 15s after launcher invocation.' | tee runtime-evidence/RUNTIME_STATUS.txt
+          fi
+
+      - name: Final evidence classification
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo 'candidate=DIRECTIVE 7'
+            echo 'physical_samsung_android16=FAIL'
+            echo 'final_go=false'
+            echo 'purpose=diagnostic reproduction only'
+            test -f runtime-evidence/RUNTIME_STATUS.txt && cat runtime-evidence/RUNTIME_STATUS.txt || true
+          } | tee runtime-evidence/FINAL_CLASSIFICATION.txt
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_7_ANDROID16_ARM64_RUNTIME_FORENSICS_v20
+          path: runtime-evidence/
+          if-no-files-found: error
+          retention-days: 30
