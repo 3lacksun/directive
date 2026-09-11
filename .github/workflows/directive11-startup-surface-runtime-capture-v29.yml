@@ -1,0 +1,48 @@
+name: DIRECTIVE 11 Startup Surface Runtime Capture v29
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive2-github-build
+    paths:
+      - 'support/directive11_startup_surface_runtime_capture_build_v2.sh'
+      - '.github/workflows/directive11-startup-surface-runtime-capture-v29.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build and verify DIRECTIVE 11
+        shell: bash
+        run: |
+          chmod +x support/directive11_startup_surface_runtime_capture_build_v2.sh
+          support/directive11_startup_surface_runtime_capture_build_v2.sh
+      - name: Upload APK and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_11_11.0.0_STARTUP_SURFACE_RUNTIME_CAPTURE_v29
+          path: |
+            out-v11/DIRECTIVE_11_11.0.0_INSTALL_SAFE_TEST.apk
+            out-v11/evidence/
+          if-no-files-found: error
+          retention-days: 30
