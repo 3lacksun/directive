@@ -1,0 +1,24 @@
+name: DIRECTIVE 11 Android 16 Private API Remediation v28
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive11_android16_private_api_remediation_build.sh'
+      - 'support/patch_directive_android16_startup_compat.py'
+      - 'support/patch_directive_startup_crash_capture.py'
+      - '.github/workflows/directive11-android16-private-api-remediation-v28.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DIRECTIVE 11 Android 16 private API remediation candidate
+        run: bash support/directive11_android16_private_api_remediation_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_11_11.0.0_ANDROID16_PRIVATE_API_REMEDIATION_v28
+          path: out-v11/
+          if-no-files-found: error
