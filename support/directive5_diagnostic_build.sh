@@ -32,11 +32,48 @@ for old, new in (
 ):
     src = src.replace(old, new)
 needle = 'cp "$PROJECT_ROOT/DIRECTIVE_INSTALL_COLLISION_REMEDIATION_REPORT.json" out-v8/evidence/'
-insert = '''python3 support/patch_directive_runtime_package_identity.py "$PROJECT_ROOT" com.directive.v5 | tee out-v8/evidence/RUNTIME_PACKAGE_IDENTITY_REMEDIATION.txt
+insert = r'''python3 support/patch_directive_runtime_package_identity.py "$PROJECT_ROOT" com.directive.v5 | tee out-v8/evidence/RUNTIME_PACKAGE_IDENTITY_REMEDIATION.txt
 cp "$PROJECT_ROOT/DIRECTIVE_RUNTIME_PACKAGE_IDENTITY_REMEDIATION_REPORT.json" out-v8/evidence/
 python3 support/patch_directive_launcher_identity.py "$PROJECT_ROOT" | tee out-v8/evidence/LAUNCHER_IDENTITY_REMEDIATION.txt
 cp "$PROJECT_ROOT/DIRECTIVE_LAUNCHER_IDENTITY_REMEDIATION_REPORT.json" out-v8/evidence/
+# The authoritative source declares abort(Throwable) as private static. The diagnostic
+# patcher was intentionally written against the equivalent instance-shaped body so the
+# throwable is p1. Temporarily normalise the declaration, instrument it, then restore the
+# original static calling convention (throwable in p0) before assembly.
+python3 - "$PROJECT_ROOT" <<'PY_STATIC_PRE'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1])/'smali_classes4/com/ticktick/task/utils/ActivityThreadCallback.smali'
+s=p.read_text(encoding='utf-8')
+old='.method private static abort(Ljava/lang/Throwable;)Z'
+new='.method private abort(Ljava/lang/Throwable;)Z'
+if s.count(old)!=1:
+    raise SystemExit(f'expected one static abort declaration, found {s.count(old)}')
+p.write_text(s.replace(old,new,1),encoding='utf-8')
+PY_STATIC_PRE
 python3 support/patch_directive_d5_diagnostic_runtime.py "$PROJECT_ROOT" com.directive.v5 | tee out-v8/evidence/D5_DIAGNOSTIC_INSTRUMENTATION.txt
+python3 - "$PROJECT_ROOT" <<'PY_STATIC_POST'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1])/'smali_classes4/com/ticktick/task/utils/ActivityThreadCallback.smali'
+s=p.read_text(encoding='utf-8')
+rx=re.compile(r'\.method private abort\(Ljava/lang/Throwable;\)Z(?P<body>.*?)\.end method',re.S)
+m=rx.search(s)
+if not m:
+    raise SystemExit('instrumented abort method missing before static restore')
+body=m.group('body')
+body=body.replace('invoke-static {p1}, Lcom/directive/runtime/DirectiveDiagnosticApplication;->recordThrowable(Ljava/lang/Throwable;)V','invoke-static {p0}, Lcom/directive/runtime/DirectiveDiagnosticApplication;->recordThrowable(Ljava/lang/Throwable;)V')
+method='.method private static abort(Ljava/lang/Throwable;)Z'+body+'.end method'
+s=s[:m.start()]+method+s[m.end():]
+p.write_text(s,encoding='utf-8')
+# Fail closed: original static calling convention restored and no process termination remains.
+s=p.read_text(encoding='utf-8')
+m=re.search(r'\.method private static abort\(Ljava/lang/Throwable;\)Z(.*?)\.end method',s,re.S)
+if not m or 'recordThrowable' not in m.group(1) or '{p0}' not in m.group(1):
+    raise SystemExit('static diagnostic abort restore failed')
+if 'killProcess' in m.group(1) or 'System;->exit' in m.group(1):
+    raise SystemExit('process termination remains in diagnostic abort')
+PY_STATIC_POST
 cp "$PROJECT_ROOT/DIRECTIVE_D5_DIAGNOSTIC_INSTRUMENTATION_REPORT.json" out-v8/evidence/
 '''
 if src.count(needle) != 1:
@@ -51,6 +88,7 @@ grep -Fq 'DIRECTIVE 5' "$GEN"
 grep -Fq '5.0.0' "$GEN"
 grep -Fq '8500' "$GEN"
 grep -Fq 'patch_directive_d5_diagnostic_runtime.py' "$GEN"
+grep -Fq 'private static abort(Ljava/lang/Throwable;)Z' "$GEN"
 
 bash "$GEN"
 
