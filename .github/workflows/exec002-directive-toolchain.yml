@@ -72,7 +72,8 @@ jobs:
           java -jar seed/apktool/apktool.jar --version
           seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/aapt2 version
           seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/apksigner version
-          seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/zipalign -h >/dev/null
+          test -x seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/zipalign
+          seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/zipalign 2>&1 | grep -F 'Zip alignment utility' >/dev/null || test ${PIPESTATUS[0]} -eq 2
 
       - name: Manifest, checksums and archive
         shell: bash
