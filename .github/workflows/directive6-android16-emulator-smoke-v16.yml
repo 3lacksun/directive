@@ -1,0 +1,153 @@
+name: DIRECTIVE 6 Android 16 Emulator Smoke v16
+
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - '.github/workflows/directive6-android16-emulator-smoke-v16.yml'
+      - 'support/directive6_android16_combined_runtime_build.sh'
+      - 'support/patch_directive_android16_startup_hardening.py'
+      - 'support/patch_directive_fixed_launcher_runtime.py'
+      - 'support/patch_directive_runtime_package_identity.py'
+      - 'support/patch_directive_launcher_identity.py'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android16-smoke:
+    name: Build and cold-launch DIRECTIVE 6 on API 36 emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android 16 emulator toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' \
+            'emulator' \
+            'platforms;android-36' \
+            'build-tools;35.0.0' \
+            'system-images;android-36;google_apis;x86_64'
+
+      - name: Build combined candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x support/directive6_android16_combined_runtime_build.sh
+          support/directive6_android16_combined_runtime_build.sh
+          test -s out-v8/DIRECTIVE_6_6.0.0_INSTALL_SAFE_TEST.apk
+
+      - name: Boot API 36 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out-v8/runtime-evidence
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          echo no | avdmanager create avd \
+            -n directive_api36 \
+            -k 'system-images;android-36;google_apis;x86_64' \
+            --force
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+          nohup emulator \
+            -avd directive_api36 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            -camera-back none \
+            -camera-front none \
+            > out-v8/runtime-evidence/EMULATOR_STDOUT.txt 2>&1 &
+          echo $! > out-v8/runtime-evidence/EMULATOR_PID.txt
+          adb wait-for-device
+          for i in $(seq 1 180); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell getprop > out-v8/runtime-evidence/DEVICE_PROPERTIES.txt
+          adb shell getprop ro.build.version.release > out-v8/runtime-evidence/ANDROID_RELEASE.txt
+          adb shell getprop ro.build.version.sdk > out-v8/runtime-evidence/ANDROID_SDK.txt
+          adb shell wm size > out-v8/runtime-evidence/DISPLAY_SIZE.txt
+
+      - name: Install and cold-launch twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVID=out-v8/runtime-evidence
+          APK=out-v8/DIRECTIVE_6_6.0.0_INSTALL_SAFE_TEST.apk
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+
+          adb install -r "$APK" | tee "$EVID/ADB_INSTALL.txt"
+          adb shell pm path com.directive.v6 | tee "$EVID/PACKAGE_PATH.txt"
+          adb shell cmd package resolve-activity --brief \
+            -a android.intent.action.MAIN \
+            -c android.intent.category.LAUNCHER \
+            com.directive.v6 | tee "$EVID/RESOLVED_LAUNCHER.txt" || true
+
+          run_launch() {
+            n="$1"
+            adb shell am force-stop com.directive.v6
+            sleep 1
+            adb logcat -c
+            adb shell monkey -p com.directive.v6 -c android.intent.category.LAUNCHER 1 \
+              | tee "$EVID/LAUNCH_${n}_MONKEY.txt"
+            sleep 2
+            adb shell pidof com.directive.v6 | tee "$EVID/LAUNCH_${n}_PID_2S.txt"
+            test -s "$EVID/LAUNCH_${n}_PID_2S.txt"
+            sleep 8
+            adb shell pidof com.directive.v6 | tee "$EVID/LAUNCH_${n}_PID_10S.txt"
+            test -s "$EVID/LAUNCH_${n}_PID_10S.txt"
+            adb shell dumpsys activity activities > "$EVID/LAUNCH_${n}_ACTIVITIES.txt"
+            adb logcat -d -v threadtime > "$EVID/LAUNCH_${n}_LOGCAT.txt"
+            if grep -E 'FATAL EXCEPTION|Process: com\.directive\.v6.*has died|Force finishing activity.*com\.directive\.v6' "$EVID/LAUNCH_${n}_LOGCAT.txt"; then
+              echo "Runtime crash signature detected on launch $n" >&2
+              return 1
+            fi
+          }
+
+          run_launch 1
+          run_launch 2
+
+          cat > "$EVID/RUNTIME_STATUS.txt" <<'EOF'
+          emulator_api=36
+          package=com.directive.v6
+          cold_launch_1_process_survived_10s=PASS
+          cold_launch_2_process_survived_10s=PASS
+          fatal_runtime_signature=NOT_DETECTED
+          samsung_physical_android16_acceptance=UNEXECUTED
+          final_go=false
+          EOF
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_6_ANDROID16_API36_RUNTIME_SMOKE_v16
+          path: |
+            out-v8/DIRECTIVE_6_6.0.0_INSTALL_SAFE_TEST.apk
+            out-v8/evidence/
+            out-v8/runtime-evidence/
+          if-no-files-found: warn
+          retention-days: 30
