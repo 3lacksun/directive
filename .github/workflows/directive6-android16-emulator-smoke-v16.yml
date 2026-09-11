@@ -35,8 +35,13 @@ jobs:
           set -euo pipefail
           export ANDROID_HOME=/usr/local/lib/android/sdk
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_SDK_HOME="$HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=$ANDROID_SDK_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             'platform-tools' \
@@ -58,18 +63,29 @@ jobs:
         run: |
           set -euo pipefail
           EVID=out-v8/runtime-evidence
-          mkdir -p "$EVID"
+          mkdir -p "$EVID" "$ANDROID_AVD_HOME"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          echo no | avdmanager create avd \
-            -n directive_api36 \
-            -k 'system-images;android-36;google_apis;x86_64' \
-            --force
+
+          printf 'no\n' | avdmanager create avd \
+            --force \
+            --name directive_api36 \
+            --package 'system-images;android-36;google_apis;x86_64' \
+            --path "$ANDROID_AVD_HOME/directive_api36.avd"
+
+          emulator -list-avds | tee "$EVID/AVD_LIST.txt"
+          grep -Fxq 'directive_api36' "$EVID/AVD_LIST.txt"
+          test -f "$ANDROID_AVD_HOME/directive_api36.ini"
+          test -d "$ANDROID_AVD_HOME/directive_api36.avd"
+          cp "$ANDROID_AVD_HOME/directive_api36.ini" "$EVID/directive_api36.ini"
+          cp "$ANDROID_AVD_HOME/directive_api36.avd/config.ini" "$EVID/directive_api36_config.ini"
+
           if [ -e /dev/kvm ]; then
             sudo chmod 666 /dev/kvm
             emulator -accel-check | tee "$EVID/ACCEL_CHECK.txt" || true
           else
             echo '/dev/kvm unavailable' | tee "$EVID/ACCEL_CHECK.txt"
           fi
+
           nohup emulator \
             -avd directive_api36 \
             -no-window \
