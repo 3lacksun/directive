@@ -24,6 +24,7 @@ repls = (
     ("('directive8test','directive11test')", "('directive8test','directive12test')"),
     ("('DIRECTIVE8_','DIRECTIVE11_')", "('DIRECTIVE8_','DIRECTIVE12_')"),
     ('patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 11', 'patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 12'),
+    ('DIRECTIVE_11_CRASH_', 'DIRECTIVE_12_CRASH_'),
     ('rm -rf out-v11', 'rm -rf out-v12'),
     ('mv out-v8 out-v11', 'mv out-v8 out-v12'),
     ('out-v11/DIRECTIVE_11_11.0.0_INSTALL_SAFE_TEST.apk', 'out-v12/DIRECTIVE_12_12.0.0_INSTALL_SAFE_TEST.apk'),
@@ -59,7 +60,9 @@ src = src.replace(anchor, addition, 1)
 final_anchor = "grep -Fq '\"pro_entitlement_guard_preserved\": true' out-v12/evidence/DIRECTIVE_STARTUP_ICON_PROCESS_EXIT_REMEDIATION_REPORT.json\n"
 if src.count(final_anchor) != 1:
     raise SystemExit('D12 final remediation gate anchor missing')
-final_addition = final_anchor + '''grep -Fq '"framework_exception_process_kill_removed": true' out-v12/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+final_addition = final_anchor + '''grep -Fq '"activity_thread_abort_capture_added": true' out-v12/evidence/DIRECTIVE11_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
+grep -Fq '"global_uncaught_capture_added": true' out-v12/evidence/DIRECTIVE11_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
+grep -Fq '"framework_exception_process_kill_removed": true' out-v12/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
 grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
 grep -Fq '"user_code_rethrow_checks_preserved": true' out-v12/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
 grep -Fq '"authentication_licensing_premium_entitlement_logic_changed": false' out-v12/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
@@ -78,8 +81,7 @@ src = src.replace(
 Path(sys.argv[2]).write_text(src, encoding='utf-8')
 PY
 chmod +x "$GEN"
-# Trace the inherited post-build acceptance gates until the converged wrapper is stable.
-bash -x "$GEN"
+bash "$GEN"
 
 APK=out-v12/DIRECTIVE_12_12.0.0_INSTALL_SAFE_TEST.apk
 test -s "$APK"
@@ -95,4 +97,4 @@ grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRE
 
 sha256sum "$APK" | tee out-v12/evidence/DIRECTIVE12_SHA256_FINAL.txt
 echo 'PASS: DIRECTIVE 12 converged source remediation and static package gates complete; Android 16 runtime still required; FINAL_GO=false'
-# workflow trigger marker v34
+# workflow trigger marker v35
