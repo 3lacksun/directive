@@ -1,0 +1,180 @@
+name: DIRECTIVE 8 Android 16 ARM64 Hardware Runtime v24
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive2-github-build
+    paths:
+      - '.github/workflows/directive8-android16-arm64-hardware-runtime-v24.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: macos-15-arm64
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise evidence
+        shell: bash
+        run: |
+          mkdir -p runtime-evidence
+          {
+            uname -a
+            uname -m
+            sw_vers
+            sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+          } > runtime-evidence/RUNNER_ENV.txt
+
+      - name: Download authoritative DIRECTIVE 8 APK
+        uses: actions/download-artifact@v4
+        with:
+          name: DIRECTIVE_8_8.0.0_STARTUP_RUNTIME_FIX_v22
+          path: d8-artifact
+          github-token: ${{ github.token }}
+          repository: 3lacksun/directive
+          run-id: 34573803331
+
+      - name: Resolve and verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find d8-artifact -type f -name 'DIRECTIVE_8_8.0.0_INSTALL_SAFE_TEST.apk' -print -quit)"
+          test -s "$APK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          shasum -a 256 "$APK" | tee runtime-evidence/APK_SHA256.txt
+          grep -Fq '3b088010b35a08ca9e8bbf0ff067231e4ec949167f1c16897813d4552ec8df96' runtime-evidence/APK_SHA256.txt
+
+      - name: Install Android 16 ARM64 image
+        id: image
+        shell: bash
+        run: |
+          set +e
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+          AVDMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager"
+          [ -x "$AVDMANAGER" ] || AVDMANAGER="$(command -v avdmanager)"
+          yes | "$SDKMANAGER" --licenses > runtime-evidence/SDK_LICENSES.txt 2>&1 || true
+          "$SDKMANAGER" 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;arm64-v8a' > runtime-evidence/SDK_INSTALL.txt 2>&1
+          if [ $? -ne 0 ]; then
+            echo ready=false >> "$GITHUB_OUTPUT"
+            echo 'INFRA_BLOCKER: Android 16 SDK/image install failed' > runtime-evidence/RUNTIME_STATUS.txt
+            exit 0
+          fi
+          echo no | "$AVDMANAGER" create avd --force -n directive_d8_api36_hw -k 'system-images;android-36;google_apis;arm64-v8a' --device 'pixel_6' > runtime-evidence/AVD_CREATE.txt 2>&1
+          if [ $? -ne 0 ]; then
+            echo ready=false >> "$GITHUB_OUTPUT"
+            echo 'INFRA_BLOCKER: Android 16 ARM64 AVD creation failed' > runtime-evidence/RUNTIME_STATUS.txt
+            exit 0
+          fi
+          "${ANDROID_HOME}/emulator/emulator" -accel-check > runtime-evidence/ACCEL_CHECK.txt 2>&1
+          ACCEL_RC=$?
+          cat runtime-evidence/ACCEL_CHECK.txt
+          if [ $ACCEL_RC -ne 0 ]; then
+            echo ready=false >> "$GITHUB_OUTPUT"
+            echo 'INFRA_BLOCKER: native ARM64 hardware acceleration unavailable on runner' > runtime-evidence/RUNTIME_STATUS.txt
+            exit 0
+          fi
+          echo ready=true >> "$GITHUB_OUTPUT"
+
+      - name: Boot Android 16 ARM64 with hardware acceleration
+        id: boot
+        if: steps.image.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set +e
+          EMULATOR="${ANDROID_HOME}/emulator/emulator"
+          "$EMULATOR" @directive_d8_api36_hw -accel on -no-window -no-audio -no-snapshot -wipe-data -no-boot-anim -no-metrics -gpu swiftshader_indirect -memory 3072 > runtime-evidence/EMULATOR_STDOUT.txt 2>&1 &
+          echo $! > runtime-evidence/EMULATOR_PID.txt
+          adb start-server > runtime-evidence/ADB_START.txt 2>&1 || true
+          booted=false
+          for i in $(seq 1 360); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=true
+              break
+            fi
+            if ! kill -0 "$(cat runtime-evidence/EMULATOR_PID.txt)" 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          adb devices -l > runtime-evidence/ADB_DEVICES.txt 2>&1 || true
+          adb shell getprop > runtime-evidence/DEVICE_GETPROP.txt 2>&1 || true
+          if [ "$booted" != true ]; then
+            echo 'INFRA_BLOCKER: Android 16 ARM64 hardware-accelerated emulator did not boot' | tee runtime-evidence/RUNTIME_STATUS.txt
+            tail -200 runtime-evidence/EMULATOR_STDOUT.txt > runtime-evidence/EMULATOR_STDOUT_TAIL.txt || true
+            echo booted=false >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo booted=true >> "$GITHUB_OUTPUT"
+
+      - name: Install and launch DIRECTIVE 8
+        id: launch
+        if: steps.boot.outputs.booted == 'true'
+        shell: bash
+        run: |
+          set +e
+          adb wait-for-device
+          adb install -r "$APK" > runtime-evidence/ADB_INSTALL.txt 2>&1
+          INSTALL_RC=$?
+          if [ $INSTALL_RC -ne 0 ]; then
+            cat runtime-evidence/ADB_INSTALL.txt
+            echo 'RUNTIME_FAIL: APK installation failed on Android 16 ARM64 emulator' | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo launched=false >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          adb shell pm list packages | grep -F 'package:com.directive.v8' > runtime-evidence/PACKAGE_INSTALLED.txt 2>&1
+          adb logcat -c || true
+          adb shell am force-stop com.directive.v8 || true
+          adb shell monkey -p com.directive.v8 -c android.intent.category.LAUNCHER 1 > runtime-evidence/LAUNCH_COMMAND.txt 2>&1
+          LAUNCH_RC=$?
+          sleep 20
+          adb shell pidof com.directive.v8 > runtime-evidence/PID_AFTER_20S.txt 2>&1 || true
+          adb shell dumpsys activity activities > runtime-evidence/ACTIVITIES_AFTER_20S.txt 2>&1 || true
+          adb logcat -d -v threadtime > runtime-evidence/LOGCAT_FULL.txt 2>&1 || true
+          adb logcat -d -b crash -v threadtime > runtime-evidence/LOGCAT_CRASH.txt 2>&1 || true
+          grep -Ei 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v8|com\.directive\.v8' runtime-evidence/LOGCAT_FULL.txt > runtime-evidence/LOGCAT_DIRECTIVE_FILTERED.txt 2>&1 || true
+
+          PID="$(tr -d '[:space:]' < runtime-evidence/PID_AFTER_20S.txt)"
+          CRASH=false
+          if grep -Eq 'FATAL EXCEPTION|Process: com\.directive\.v8' runtime-evidence/LOGCAT_CRASH.txt runtime-evidence/LOGCAT_DIRECTIVE_FILTERED.txt; then
+            CRASH=true
+          fi
+          if [ $LAUNCH_RC -eq 0 ] && [ -n "$PID" ] && [ "$CRASH" = false ]; then
+            echo 'RUNTIME_PASS: DIRECTIVE 8 remained alive for 20 seconds after launcher start on Android 16 ARM64 emulator' | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo launched=true >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'RUNTIME_FAIL: DIRECTIVE 8 did not satisfy Android 16 startup survival gate'
+              echo "launch_rc=$LAUNCH_RC"
+              echo "pid_after_20s=${PID:-NONE}"
+              echo "crash_signature=$CRASH"
+            } | tee runtime-evidence/RUNTIME_STATUS.txt
+            echo launched=false >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Classification
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo 'candidate=DIRECTIVE 8'
+            echo 'candidate_sha256=3b088010b35a08ca9e8bbf0ff067231e4ec949167f1c16897813d4552ec8df96'
+            echo 'physical_samsung_android16=DIRECTIVE_4_FAIL_REMAINS_AUTHORITATIVE_UNTIL_NEW_PHYSICAL_TEST'
+            echo 'final_go=false'
+            test -f runtime-evidence/RUNTIME_STATUS.txt && cat runtime-evidence/RUNTIME_STATUS.txt || echo 'RUNTIME_STATUS=UNVERIFIABLE'
+          } | tee runtime-evidence/FINAL_CLASSIFICATION.txt
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_8_ANDROID16_ARM64_HARDWARE_RUNTIME_v24
+          path: runtime-evidence/
+          if-no-files-found: error
+          retention-days: 30
