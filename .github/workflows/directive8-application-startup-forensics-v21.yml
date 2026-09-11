@@ -1,0 +1,32 @@
+name: DIRECTIVE 8 Application Startup Forensics v21
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive8_application_startup_forensics.sh'
+      - '.github/workflows/directive8-application-startup-forensics-v21.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+
+permissions:
+  contents: read
+
+jobs:
+  startup-forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect application startup compatibility paths
+        shell: bash
+        run: |
+          chmod +x support/directive8_application_startup_forensics.sh
+          support/directive8_application_startup_forensics.sh
+      - name: Upload application startup evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_8_APPLICATION_STARTUP_FORENSICS_v21
+          path: out-d8-app-startup/APPLICATION_STARTUP_FORENSICS.txt
+          if-no-files-found: error
+          retention-days: 30
