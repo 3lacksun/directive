@@ -6,6 +6,10 @@ set -euo pipefail
 # launcher aliases coherent with the numbered applicationId and disabling the inherited
 # cosmetic launcher-icon mutator that intentionally calls System.exit().
 
+BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-35.0.0}"
+ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+export BUILD_TOOLS_VERSION ANDROID_HOME ANDROID_SDK_ROOT="$ANDROID_HOME"
+
 BASE=support/directive3_install_safe_build.sh
 PACKAGE_PATCHER=support/patch_directive_runtime_package_identity.py
 LAUNCHER_ART_PATCHER=support/patch_directive_launcher_identity.py
