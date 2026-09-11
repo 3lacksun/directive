@@ -1,0 +1,22 @@
+name: DIRECTIVE 9 Dynamic Receiver Forensics v25
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive9_dynamic_receiver_forensics.sh'
+      - '.github/workflows/directive9-dynamic-receiver-forensics-v25.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+jobs:
+  forensics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run dynamic receiver startup forensics
+        run: bash support/directive9_dynamic_receiver_forensics.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_9_DYNAMIC_RECEIVER_FORENSICS_v25
+          path: out-d9-receiver-forensics/
+          if-no-files-found: error
