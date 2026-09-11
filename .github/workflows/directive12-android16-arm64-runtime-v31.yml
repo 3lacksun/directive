@@ -1,0 +1,125 @@
+name: DIRECTIVE 12 Android 16 ARM64 Runtime v31
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive2-github-build
+    paths:
+      - '.github/workflows/directive12-android16-arm64-runtime-v31.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  runtime-probe:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download accepted DIRECTIVE 12 build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DIRECTIVE_12_12.0.0_CONVERGED_STARTUP_RUNTIME_v30
+          path: artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 34599123067
+
+      - name: Verify candidate identity and hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=artifact/DIRECTIVE_12_12.0.0_INSTALL_SAFE_TEST.apk
+          test -s "$APK"
+          printf '%s  %s\n' 'cad9884ea572a1a2b9692962b071306566655877e778ca950c4c9b34a6289171' "$APK" | shasum -a 256 -c -
+          uname -a | tee artifact/RUNTIME_HOST_UNAME.txt
+          uname -m | tee artifact/RUNTIME_HOST_ARCH.txt
+          test "$(uname -m)" = 'arm64'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 'latest'
+
+      - name: Install Android 16 ARM64 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          IMAGE='system-images;android-36;google_apis;arm64-v8a'
+          sdkmanager 'platform-tools' 'emulator' "$IMAGE"
+          echo no | avdmanager create avd --force --name directive-api36-arm64 --package "$IMAGE"
+          printf '%s\n' "$IMAGE" | tee artifact/ANDROID16_RUNTIME_IMAGE.txt
+          "$ANDROID_HOME/emulator/emulator" -accel-check 2>&1 | tee artifact/EMULATOR_ACCEL_CHECK.txt || true
+
+      - name: Boot Android 16 ARM64 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOOT_LOG=artifact/ANDROID16_ARM64_EMULATOR_BOOT.txt
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd directive-api36-arm64 \
+            -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
+            -gpu swiftshader_indirect \
+            > "$BOOT_LOG" 2>&1 &
+          EMU_PID=$!
+          echo "$EMU_PID" > artifact/EMULATOR_PID.txt
+          adb wait-for-device
+          boot=''
+          for i in $(seq 1 120); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$boot" = '1' ] && break
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo 'EMULATOR_EXITED_BEFORE_BOOT' >&2
+              cat "$BOOT_LOG" >&2 || true
+              exit 2
+            fi
+            sleep 2
+          done
+          if [ "$boot" != '1' ]; then
+            echo 'ANDROID16_ARM64_EMULATOR_BOOT_TIMEOUT' >&2
+            cat "$BOOT_LOG" >&2 || true
+            exit 3
+          fi
+          {
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell getprop ro.product.cpu.abi
+            adb shell getprop ro.product.cpu.abilist
+          } | tee artifact/ANDROID16_RUNTIME_PROPERTIES.txt
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = '36'
+          adb shell getprop ro.product.cpu.abilist | tr -d '\r' | grep -q 'arm64-v8a'
+
+      - name: Clean install and cold-launch DIRECTIVE 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=artifact/DIRECTIVE_12_12.0.0_INSTALL_SAFE_TEST.apk
+          PKG=com.directive.v12
+          adb uninstall "$PKG" >/dev/null 2>&1 || true
+          adb logcat -c
+          adb install "$APK" | tee artifact/ANDROID16_D12_INSTALL.txt
+          grep -q 'Success' artifact/ANDROID16_D12_INSTALL.txt
+          COMPONENT="$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "$PKG" | tail -n 1 | tr -d '\r')"
+          test -n "$COMPONENT"
+          printf '%s\n' "$COMPONENT" | tee artifact/ANDROID16_D12_LAUNCH_COMPONENT.txt
+          adb shell am start -W -n "$COMPONENT" | tee artifact/ANDROID16_D12_COLD_LAUNCH.txt
+          grep -q 'Status: ok' artifact/ANDROID16_D12_COLD_LAUNCH.txt
+          sleep 8
+          PID="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
+          printf '%s\n' "$PID" | tee artifact/ANDROID16_D12_PID_AFTER_8S.txt
+          adb logcat -d -v threadtime > artifact/ANDROID16_D12_LOGCAT.txt
+          test -n "$PID"
+          ! grep -E 'FATAL EXCEPTION:.*|Process: com\.directive\.v12.*has died|Force finishing activity.*com\.directive\.v12' artifact/ANDROID16_D12_LOGCAT.txt
+          echo 'ANDROID16_ARM64_COLD_START=PASS' | tee artifact/ANDROID16_D12_RUNTIME_RESULT.txt
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_12_ANDROID16_ARM64_RUNTIME_v31
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
