@@ -1,0 +1,110 @@
+name: EXEC002 DIRECTIVE Android Toolchain Seeder
+
+on:
+  push:
+    branches:
+      - exec002-directive-toolchain-11092026
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    name: Seed Apktool and Android build-tools 35
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APKTOOL_VERSION: '2.12.1'
+      APKTOOL_SHA256: '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa'
+      BUILD_TOOLS_VERSION: '35.0.0'
+      ANDROID_PLATFORM: '35'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install exact Android components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-${ANDROID_PLATFORM}" "build-tools;${BUILD_TOOLS_VERSION}"
+
+      - name: Fetch and verify Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p seed/apktool
+          curl -fL --retry 3 \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
+            -o "seed/apktool/apktool.jar"
+          echo "${APKTOOL_SHA256}  seed/apktool/apktool.jar" | sha256sum -c -
+          java -jar seed/apktool/apktool.jar --version
+
+      - name: Assemble non-secret toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p seed/android-sdk/build-tools seed/android-sdk/platforms artifact
+          cp -a "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" "seed/android-sdk/build-tools/"
+          cp -a "${ANDROID_HOME}/platforms/android-${ANDROID_PLATFORM}" "seed/android-sdk/platforms/"
+          cat > seed/env.sh <<'EOF'
+          export DIRECTIVE_TOOLCHAIN_ROOT="${DIRECTIVE_TOOLCHAIN_ROOT:-$PWD}"
+          export ANDROID_HOME="$DIRECTIVE_TOOLCHAIN_ROOT/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export PATH="$ANDROID_HOME/build-tools/35.0.0:$PATH"
+          EOF
+          chmod +x seed/env.sh
+
+      - name: Verify packaged executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar seed/apktool/apktool.jar --version
+          seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/aapt2 version
+          seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/apksigner version
+          seed/android-sdk/build-tools/${BUILD_TOOLS_VERSION}/zipalign -h >/dev/null
+
+      - name: Manifest, checksums and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          root=Path('seed')
+          data={
+            'profile':'directive-exec002-apktool-2.12.1-bt35-api35-x86_64',
+            'architecture':platform.machine(),
+            'apktool_version':os.environ['APKTOOL_VERSION'],
+            'apktool_sha256':os.environ['APKTOOL_SHA256'],
+            'android_build_tools':os.environ['BUILD_TOOLS_VERSION'],
+            'android_platform':os.environ['ANDROID_PLATFORM'],
+            'contains_secrets':False,
+            'source_repository':os.environ.get('GITHUB_REPOSITORY'),
+            'source_commit':os.environ.get('GITHUB_SHA'),
+            'source_run_id':os.environ.get('GITHUB_RUN_ID'),
+          }
+          (root/'TOOLCHAIN_MANIFEST.json').write_text(json.dumps(data,indent=2)+'\n')
+          PY
+          (cd seed && find . -type f -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256)
+          tar -C seed -czf artifact/DIRECTIVE_EXEC002_ANDROID_TOOLCHAIN.tar.gz .
+          sha256sum artifact/DIRECTIVE_EXEC002_ANDROID_TOOLCHAIN.tar.gz > artifact/SHA256SUMS.txt
+          cp seed/TOOLCHAIN_MANIFEST.json artifact/
+
+      - name: Upload toolchain artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: directive-exec002-android-toolchain
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 7
