@@ -1,0 +1,32 @@
+name: DIRECTIVE 8 Startup Source Slice v22
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive8_extract_startup_source_slice.sh'
+      - '.github/workflows/directive8-startup-source-slice-v22.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract exact authoritative startup source slice
+        shell: bash
+        run: |
+          chmod +x support/directive8_extract_startup_source_slice.sh
+          support/directive8_extract_startup_source_slice.sh
+      - name: Upload startup source slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_8_STARTUP_SOURCE_SLICE_v22
+          path: out-d8-source-slice/slice/
+          if-no-files-found: error
+          retention-days: 30
