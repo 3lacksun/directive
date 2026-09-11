@@ -1,0 +1,73 @@
+name: DIRECTIVE 7 ARM64 Android 16 Runtime v17
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - directive2-github-build
+    paths:
+      - '.github/workflows/directive7-arm64-android16-runtime-v17.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download authoritative D7 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DIRECTIVE_7_7.0.0_PROVIDER_AUTHORITY_FIX_v16
+          path: candidate
+          repository: 3lacksun/directive
+          run-id: 34569031865
+          github-token: ${{ github.token }}
+      - name: Host architecture
+        shell: bash
+        run: uname -a | tee HOST_ARCH.txt
+      - name: Android 16 ARM64 cold launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: arm64-v8a
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none -no-metrics
+          script: |
+            set -u
+            mkdir -p runtime
+            APK=candidate/DIRECTIVE_7_7.0.0_INSTALL_SAFE_TEST.apk
+            adb wait-for-device
+            adb shell getprop ro.build.version.sdk | tee runtime/API_LEVEL.txt
+            adb shell getprop ro.product.cpu.abi | tee runtime/ABI.txt
+            adb install "$APK" 2>&1 | tee runtime/ADB_INSTALL.txt
+            adb logcat -c
+            adb shell am force-stop com.directive.v7 || true
+            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.directive.v7 2>&1 | tee runtime/COLD_LAUNCH.txt || true
+            sleep 15
+            adb shell pidof com.directive.v7 | tee runtime/PID.txt || true
+            adb logcat -d -v threadtime > runtime/LOGCAT.txt
+            adb shell dumpsys activity exit-info com.directive.v7 > runtime/EXIT_INFO.txt || true
+            grep -n -E -A 100 -B 20 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v7|Unable to create application|Unable to start activity|NoClassDefFoundError|ClassNotFoundException|UnsatisfiedLinkError|SecurityException|IllegalStateException|Resources\$NotFoundException' runtime/LOGCAT.txt > runtime/CRASH_EXCERPT.txt || true
+            if [ -s runtime/PID.txt ]; then
+              echo 'PROCESS_ALIVE_AFTER_15S=YES' | tee runtime/STATUS.txt
+            else
+              echo 'PROCESS_ALIVE_AFTER_15S=NO' | tee runtime/STATUS.txt
+              cat runtime/CRASH_EXCERPT.txt || true
+              exit 1
+            fi
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_7_ARM64_ANDROID16_RUNTIME_v17
+          path: |
+            HOST_ARCH.txt
+            runtime/
+          if-no-files-found: warn
+          retention-days: 30
