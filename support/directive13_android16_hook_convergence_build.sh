@@ -41,7 +41,9 @@ for old, new in repls:
         raise SystemExit(f'D13 required transformation anchor missing: {old}')
     src = src.replace(old, new)
 
-anchor = 'cp "$PROJECT_ROOT/DIRECTIVE13_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json" out-v8/evidence/\n'
+# The startup-surface patcher retains its historical D11 evidence filename; that is
+# provenance, not release identity. Insert D13 convergence immediately after it.
+anchor = 'cp "$PROJECT_ROOT/DIRECTIVE11_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json" out-v8/evidence/\n'
 if src.count(anchor) != 1:
     raise SystemExit(f'D13 convergence insertion anchor count={src.count(anchor)}')
 addition = anchor + '''python3 support/patch_directive_activitythread_abort.py "$PROJECT_ROOT" | tee out-v8/evidence/ACTIVITYTHREAD_ABORT_REMEDIATION.txt
@@ -54,8 +56,8 @@ src = src.replace(anchor, addition, 1)
 final_anchor = "grep -Fq '\"pro_entitlement_guard_preserved\": true' out-v13/evidence/DIRECTIVE_STARTUP_ICON_PROCESS_EXIT_REMEDIATION_REPORT.json\n"
 if src.count(final_anchor) != 1:
     raise SystemExit('D13 final remediation gate anchor missing')
-final_addition = final_anchor + '''grep -Fq '"activity_thread_abort_capture_added": true' out-v13/evidence/DIRECTIVE13_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
-grep -Fq '"global_uncaught_capture_added": true' out-v13/evidence/DIRECTIVE13_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
+final_addition = final_anchor + '''grep -Fq '"activity_thread_abort_capture_added": true' out-v13/evidence/DIRECTIVE11_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
+grep -Fq '"global_uncaught_capture_added": true' out-v13/evidence/DIRECTIVE11_STARTUP_SURFACE_RUNTIME_CAPTURE_REPORT.json
 grep -Fq '"framework_exception_process_kill_removed": true' out-v13/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
 grep -Fq '"framework_exception_system_exit_removed": true' out-v13/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
 grep -Fq '"user_code_rethrow_checks_preserved": true' out-v13/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
