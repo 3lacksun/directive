@@ -21,6 +21,7 @@ for old, new in (
     ('DIRECTIVE10_', 'DIRECTIVE11_'),
     ('out-v10', 'out-v11'),
     ('d10_physical_android16_runtime', 'd11_physical_android16_runtime'),
+    ('patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 10', 'patch_directive_startup_crash_capture.py "$PROJECT_ROOT" 11'),
 ):
     src = src.replace(old, new)
 
