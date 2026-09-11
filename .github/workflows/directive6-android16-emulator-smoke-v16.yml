@@ -20,7 +20,7 @@ jobs:
   android16-smoke:
     name: Build and cold-launch DIRECTIVE 6 on API 36 emulator
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -57,39 +57,66 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out-v8/runtime-evidence
+          EVID=out-v8/runtime-evidence
+          mkdir -p "$EVID"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           echo no | avdmanager create avd \
             -n directive_api36 \
             -k 'system-images;android-36;google_apis;x86_64' \
             --force
-          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            emulator -accel-check | tee "$EVID/ACCEL_CHECK.txt" || true
+          else
+            echo '/dev/kvm unavailable' | tee "$EVID/ACCEL_CHECK.txt"
+          fi
           nohup emulator \
             -avd directive_api36 \
             -no-window \
             -no-audio \
             -no-boot-anim \
             -no-snapshot \
+            -no-metrics \
+            -accel on \
             -gpu swiftshader_indirect \
             -camera-back none \
             -camera-front none \
-            > out-v8/runtime-evidence/EMULATOR_STDOUT.txt 2>&1 &
-          echo $! > out-v8/runtime-evidence/EMULATOR_PID.txt
-          adb wait-for-device
-          for i in $(seq 1 180); do
+            > "$EVID/EMULATOR_STDOUT.txt" 2>&1 &
+          echo $! > "$EVID/EMULATOR_PID.txt"
+
+          if ! timeout 180s adb wait-for-device; then
+            adb devices -l > "$EVID/ADB_DEVICES_ON_TIMEOUT.txt" 2>&1 || true
+            ps auxww > "$EVID/PROCESS_LIST_ON_TIMEOUT.txt" 2>&1 || true
+            tail -n 300 "$EVID/EMULATOR_STDOUT.txt" || true
+            echo 'EMULATOR_ADB_TIMEOUT' > "$EVID/BOOT_STATUS.txt"
+            exit 1
+          fi
+
+          booted=false
+          for i in $(seq 1 90); do
             if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=true
               break
             fi
             sleep 2
           done
-          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
+          if [ "$booted" != true ]; then
+            adb devices -l > "$EVID/ADB_DEVICES_ON_BOOT_TIMEOUT.txt" 2>&1 || true
+            adb shell getprop > "$EVID/DEVICE_PROPERTIES_ON_BOOT_TIMEOUT.txt" 2>&1 || true
+            tail -n 300 "$EVID/EMULATOR_STDOUT.txt" || true
+            echo 'EMULATOR_BOOT_TIMEOUT' > "$EVID/BOOT_STATUS.txt"
+            exit 1
+          fi
+
+          echo 'EMULATOR_BOOT_PASS' > "$EVID/BOOT_STATUS.txt"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
-          adb shell getprop > out-v8/runtime-evidence/DEVICE_PROPERTIES.txt
-          adb shell getprop ro.build.version.release > out-v8/runtime-evidence/ANDROID_RELEASE.txt
-          adb shell getprop ro.build.version.sdk > out-v8/runtime-evidence/ANDROID_SDK.txt
-          adb shell wm size > out-v8/runtime-evidence/DISPLAY_SIZE.txt
+          adb shell getprop > "$EVID/DEVICE_PROPERTIES.txt"
+          adb shell getprop ro.build.version.release > "$EVID/ANDROID_RELEASE.txt"
+          adb shell getprop ro.build.version.sdk > "$EVID/ANDROID_SDK.txt"
+          adb shell wm size > "$EVID/DISPLAY_SIZE.txt"
+          test "$(tr -d '\r\n ' < "$EVID/ANDROID_SDK.txt")" = '36'
 
       - name: Install and cold-launch twice
         shell: bash
@@ -100,7 +127,9 @@ jobs:
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
           adb install -r "$APK" | tee "$EVID/ADB_INSTALL.txt"
+          grep -Fq 'Success' "$EVID/ADB_INSTALL.txt"
           adb shell pm path com.directive.v6 | tee "$EVID/PACKAGE_PATH.txt"
+          grep -Fq 'package:' "$EVID/PACKAGE_PATH.txt"
           adb shell cmd package resolve-activity --brief \
             -a android.intent.action.MAIN \
             -c android.intent.category.LAUNCHER \
