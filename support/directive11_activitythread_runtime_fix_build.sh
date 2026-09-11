@@ -31,20 +31,6 @@ addition = anchor + '''python3 support/patch_directive_activitythread_abort.py "
 cp "$PROJECT_ROOT/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json" out-v8/evidence/
 '''
 src = src.replace(anchor, addition, 1)
-
-old_echo = "echo 'PASS: DIRECTIVE 11 Android 16 startup receiver remediation built and statically verified; FINAL_GO=false'"
-new_echo = """grep -Fq '\"framework_exception_process_kill_removed\": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-grep -Fq '\"framework_exception_system_exit_removed\": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-grep -Fq '\"user_code_rethrow_checks_preserved\": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-grep -Fq '\"authentication_licensing_premium_entitlement_logic_changed\": false' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-grep -Fq '\"offline_network_permission_boundary_changed\": false' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-grep -Fq '\"inherited_ticktick_class_namespace_preserved\": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
-sed -i 's#root_cause_candidate=legacy_unflagged_dynamic_settings_receiver_on_application_onCreate#root_cause_candidates=launch_time_process_exit_and_framework_exception_abort;physical_root_cause_not_yet_runtime_confirmed#' out-v11/evidence/DIRECTIVE11_RUNTIME_DISPOSITION.txt
-printf '%s\\n' 'activitythread_framework_abort_remediation=PASS_STATIC' >> out-v11/evidence/DIRECTIVE11_RUNTIME_DISPOSITION.txt
-echo 'PASS: DIRECTIVE 11 framework-exception process-abort remediation built and statically verified; FINAL_GO=false'"""
-if old_echo not in src:
-    raise SystemExit('D11 terminal build message anchor missing')
-src = src.replace(old_echo, new_echo, 1)
 Path(sys.argv[2]).write_text(src, encoding='utf-8')
 PY
 chmod +x "$GEN"
@@ -52,4 +38,13 @@ bash "$GEN"
 
 APK=out-v11/DIRECTIVE_11_11.0.0_INSTALL_SAFE_TEST.apk
 test -s "$APK"
+grep -Fq '"framework_exception_process_kill_removed": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+grep -Fq '"framework_exception_system_exit_removed": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+grep -Fq '"user_code_rethrow_checks_preserved": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+grep -Fq '"authentication_licensing_premium_entitlement_logic_changed": false' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+grep -Fq '"offline_network_permission_boundary_changed": false' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+grep -Fq '"inherited_ticktick_class_namespace_preserved": true' out-v11/evidence/DIRECTIVE_ACTIVITYTHREAD_ABORT_REMEDIATION_REPORT.json
+sed -i 's#root_cause_candidate=legacy_unflagged_dynamic_settings_receiver_on_application_onCreate#root_cause_candidates=launch_time_process_exit_and_framework_exception_abort;physical_root_cause_not_yet_runtime_confirmed#' out-v11/evidence/DIRECTIVE11_RUNTIME_DISPOSITION.txt
+printf '%s\n' 'activitythread_framework_abort_remediation=PASS_STATIC' >> out-v11/evidence/DIRECTIVE11_RUNTIME_DISPOSITION.txt
 sha256sum "$APK" | tee out-v11/evidence/DIRECTIVE11_SHA256_FINAL.txt
+echo 'PASS: DIRECTIVE 11 framework-exception process-abort remediation built and statically verified; FINAL_GO=false'
