@@ -29,8 +29,7 @@ report = {
     'auth_billing_entitlement_logic_modified': False,
 }
 
-# 1) Android 16 target alignment. The app is being validated on API 36; targeting API 37
-# exposed future behaviour before the Android 16 remediation was complete.
+# 1) Android 16 target alignment.
 meta = root / 'apktool.json'
 if meta.is_file():
     data = json.loads(meta.read_text(encoding='utf-8'))
@@ -45,7 +44,7 @@ if yml.is_file():
         yml.write_text(s, encoding='utf-8')
 
 # 2) Disable the legacy ActivityThread mH callback shim. It explicitly killProcess()+System.exit()
-# on framework errors. That behaviour masks the real exception and is unsafe on modern Android.
+# on framework errors and can turn a recoverable compatibility issue into an instant close.
 base = root / 'smali_classes2/com/ticktick/task/TickTickApplicationBase.smali'
 s = base.read_text(encoding='utf-8')
 pat = re.compile(r'\.method private initExceptionHandler\(\)V\n.*?\.end method', re.S)
@@ -56,9 +55,8 @@ if n != 1:
 base.write_text(s2, encoding='utf-8')
 report['activity_thread_abort_hook_disabled'] = True
 
-# 3) Disable startup-only global receiver registration. The receiver only reacts to screen/
-# locale/configuration changes; omitting it avoids legacy dynamic-receiver registration during
-# cold launch. Core task/calendar/reminder storage remains unaffected.
+# 3) Disable startup-only global receiver registration. Its actions are screen/locale/configuration
+# notifications; core task/calendar/reminder storage does not depend on this registration.
 s = base.read_text(encoding='utf-8')
 pat = re.compile(r'\.method private registerGlobalBroadcastReceiver\(\)V\n.*?\.end method', re.S)
 replacement = '.method private registerGlobalBroadcastReceiver()V\n    .locals 0\n\n    return-void\n.end method'
@@ -68,8 +66,7 @@ if n != 1:
 base.write_text(s2, encoding='utf-8')
 report['global_dynamic_receiver_startup_registration_disabled'] = True
 
-# 4) DIRECTIVE is offline-only. Remove nonessential startup initialisation from the concrete
-# application that can invoke SDK/provider compatibility code before the first screen.
+# 4) DIRECTIVE is offline-only. Remove nonessential startup registration / Firebase init.
 app = root / 'smali_classes2/com/ticktick/task/TickTickApplication.smali'
 s = app.read_text(encoding='utf-8')
 old = '    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;'
@@ -84,8 +81,8 @@ s = s.replace(old, '    # DIRECTIVE offline runtime: Firebase startup init inten
 report['firebase_app_startup_init_disabled'] = True
 app.write_text(s, encoding='utf-8')
 
-# 5) Providers for removed online/telemetry/social stacks must not auto-initialise before
-# Application.onCreate. Keep AndroidX Startup because WorkManager/lifecycle are local core deps.
+# 5) Prevent removed online/telemetry/social stacks auto-initialising before Application.onCreate.
+# AndroidX Startup remains enabled because WorkManager/lifecycle are local core dependencies.
 manifest = root / 'AndroidManifest.xml'
 m = manifest.read_text(encoding='utf-8', errors='replace')
 providers = [
@@ -96,19 +93,23 @@ providers = [
     'com.google.mlkit.common.internal.MlKitInitProvider',
 ]
 for name in providers:
-    rx = re.compile(r'(<provider\b(?=[^>]*android:name="' + re.escape(name) + r'")[^>]*)(/?>)', re.S)
+    rx = re.compile(r'<provider\b(?=[^>]*android:name="' + re.escape(name) + r'")[^>]*?/?>', re.S)
     mm = rx.search(m)
     if not mm:
         raise SystemExit(f'required provider not found: {name}')
     tag = mm.group(0)
-    if 'android:enabled=' not in tag:
-        newtag = mm.group(1) + ' android:enabled="false"' + mm.group(2)
-    else:
+    if 'android:enabled=' in tag:
         newtag = re.sub(r'android:enabled="[^"]+"', 'android:enabled="false"', tag, count=1)
+    elif tag.endswith('/>'):
+        newtag = tag[:-2].rstrip() + ' android:enabled="false"/>'
+    elif tag.endswith('>'):
+        newtag = tag[:-1].rstrip() + ' android:enabled="false">'
+    else:
+        raise SystemExit(f'unexpected provider tag form: {name}')
     m = m[:mm.start()] + newtag + m[mm.end():]
     report['startup_providers_disabled'].append(name)
 
-# Retarget task affinities that are application identity, while keeping inherited class names.
+# Retarget app-owned task affinities while preserving inherited class/JNI namespaces.
 for old, new in [
     ('android:taskAffinity="com.ticktick.task.external"', f'android:taskAffinity="{target}.external"'),
     ('android:taskAffinity="com.ticktick.task.second"', f'android:taskAffinity="{target}.second"'),
@@ -129,7 +130,7 @@ if not mg or 'registerReceiver' in mg.group(1):
     raise SystemExit('legacy global startup receiver still active')
 ms = manifest.read_text(encoding='utf-8')
 for name in providers:
-    mm = re.search(r'<provider\b(?=[^>]*android:name="' + re.escape(name) + r'")[^>]*>', ms, re.S)
+    mm = re.search(r'<provider\b(?=[^>]*android:name="' + re.escape(name) + r'")[^>]*?/?>', ms, re.S)
     if not mm or 'android:enabled="false"' not in mm.group(0):
         raise SystemExit(f'provider not disabled: {name}')
 for forbidden in ['android.permission.INTERNET','android.permission.ACCESS_NETWORK_STATE','android.permission.ACCESS_WIFI_STATE','android.permission.CHANGE_NETWORK_STATE','android.permission.CHANGE_WIFI_STATE']:
