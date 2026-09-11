@@ -1,0 +1,26 @@
+name: DIRECTIVE 11 ActivityThread Runtime Fix v28
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/patch_directive_activitythread_abort.py'
+      - 'support/directive11_activitythread_runtime_fix_build.sh'
+      - '.github/workflows/directive11-activitythread-runtime-fix-v28.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and statically verify DIRECTIVE 11
+        run: bash support/directive11_activitythread_runtime_fix_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_11_11.0.0_ACTIVITYTHREAD_RUNTIME_FIX_v28
+          path: out-v11/
+          if-no-files-found: error
+          retention-days: 90
