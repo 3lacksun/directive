@@ -1,0 +1,23 @@
+name: DIRECTIVE 9 Startup Crash Capture v26
+on:
+  push:
+    branches: [directive2-github-build]
+    paths:
+      - 'support/directive9_startup_crash_capture_build.sh'
+      - 'support/patch_directive_startup_crash_capture.py'
+      - '.github/workflows/directive9-startup-crash-capture-v26.yml'
+      - 'DIRECTIVE2_SOURCE.json'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DIRECTIVE 9 diagnostic candidate
+        run: bash support/directive9_startup_crash_capture_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DIRECTIVE_9_9.0.0_STARTUP_CRASH_CAPTURE_v26
+          path: out-v9/
+          if-no-files-found: error
