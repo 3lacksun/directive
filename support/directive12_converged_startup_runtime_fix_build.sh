@@ -92,3 +92,4 @@ grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRE
 
 sha256sum "$APK" | tee out-v12/evidence/DIRECTIVE12_SHA256_FINAL.txt
 echo 'PASS: DIRECTIVE 12 converged source remediation and static package gates complete; Android 16 runtime still required; FINAL_GO=false'
+# workflow trigger marker v30
