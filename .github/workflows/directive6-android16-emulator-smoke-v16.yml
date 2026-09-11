@@ -151,6 +151,17 @@ jobs:
             -c android.intent.category.LAUNCHER \
             com.directive.v6 | tee "$EVID/RESOLVED_LAUNCHER.txt" || true
 
+          capture_runtime() {
+            n="$1"
+            phase="$2"
+            adb shell dumpsys activity activities > "$EVID/LAUNCH_${n}_${phase}_ACTIVITIES.txt" 2>&1 || true
+            adb shell dumpsys activity processes > "$EVID/LAUNCH_${n}_${phase}_PROCESSES.txt" 2>&1 || true
+            adb shell dumpsys package com.directive.v6 > "$EVID/LAUNCH_${n}_${phase}_PACKAGE.txt" 2>&1 || true
+            adb logcat -d -v threadtime > "$EVID/LAUNCH_${n}_${phase}_LOGCAT.txt" 2>&1 || true
+            adb shell dumpsys dropbox --print data_app_crash > "$EVID/LAUNCH_${n}_${phase}_DROPBOX_DATA_APP_CRASH.txt" 2>&1 || true
+            adb shell dumpsys dropbox --print SYSTEM_TOMBSTONE > "$EVID/LAUNCH_${n}_${phase}_DROPBOX_TOMBSTONE.txt" 2>&1 || true
+          }
+
           run_launch() {
             n="$1"
             adb shell am force-stop com.directive.v6
@@ -158,26 +169,60 @@ jobs:
             adb logcat -c
             adb shell monkey -p com.directive.v6 -c android.intent.category.LAUNCHER 1 \
               | tee "$EVID/LAUNCH_${n}_MONKEY.txt"
+
             sleep 2
-            adb shell pidof com.directive.v6 | tee "$EVID/LAUNCH_${n}_PID_2S.txt"
-            test -s "$EVID/LAUNCH_${n}_PID_2S.txt"
-            sleep 8
-            adb shell pidof com.directive.v6 | tee "$EVID/LAUNCH_${n}_PID_10S.txt"
-            test -s "$EVID/LAUNCH_${n}_PID_10S.txt"
-            adb shell dumpsys activity activities > "$EVID/LAUNCH_${n}_ACTIVITIES.txt"
-            adb logcat -d -v threadtime > "$EVID/LAUNCH_${n}_LOGCAT.txt"
-            if grep -E 'FATAL EXCEPTION|Process: com\.directive\.v6.*has died|Force finishing activity.*com\.directive\.v6' "$EVID/LAUNCH_${n}_LOGCAT.txt"; then
-              echo "Runtime crash signature detected on launch $n" >&2
-              return 1
+            pid2="$(adb shell pidof com.directive.v6 2>/dev/null | tr -d '\r' || true)"
+            printf '%s\n' "$pid2" | tee "$EVID/LAUNCH_${n}_PID_2S.txt"
+            if [ -z "$pid2" ]; then
+              capture_runtime "$n" 'FAIL_2S'
+              echo "PROCESS_DEAD_BY_2S" > "$EVID/LAUNCH_${n}_RESULT.txt"
+              return 21
             fi
+
+            sleep 8
+            pid10="$(adb shell pidof com.directive.v6 2>/dev/null | tr -d '\r' || true)"
+            printf '%s\n' "$pid10" | tee "$EVID/LAUNCH_${n}_PID_10S.txt"
+            capture_runtime "$n" 'AT_10S'
+
+            if [ -z "$pid10" ]; then
+              echo "PROCESS_DEAD_BEFORE_10S" > "$EVID/LAUNCH_${n}_RESULT.txt"
+              grep -E -i 'FATAL EXCEPTION|AndroidRuntime|Process: com\.directive\.v6|has died|Force finishing|SIGABRT|SIGSEGV|UnsatisfiedLinkError|SecurityException|IllegalStateException|RuntimeException|ExceptionInInitializerError|NoClassDefFoundError|ClassNotFoundException' \
+                "$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt" \
+                | tail -n 250 \
+                | tee "$EVID/LAUNCH_${n}_CRASH_EXTRACT.txt" || true
+              return 22
+            fi
+
+            if grep -E 'FATAL EXCEPTION|Process: com\.directive\.v6.*has died|Force finishing activity.*com\.directive\.v6' "$EVID/LAUNCH_${n}_AT_10S_LOGCAT.txt"; then
+              echo "FATAL_RUNTIME_SIGNATURE" > "$EVID/LAUNCH_${n}_RESULT.txt"
+              return 23
+            fi
+
+            echo "PASS_PROCESS_SURVIVED_10S" > "$EVID/LAUNCH_${n}_RESULT.txt"
           }
 
-          run_launch 1
-          run_launch 2
+          status=0
+          run_launch 1 || status=$?
+          if [ "$status" -eq 0 ]; then
+            run_launch 2 || status=$?
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            cat > "$EVID/RUNTIME_STATUS.txt" <<EOF
+          emulator_api=36
+          package=com.directive.v6
+          runtime_status=FAIL
+          failure_code=$status
+          samsung_physical_android16_acceptance=UNEXECUTED
+          final_go=false
+          EOF
+            exit "$status"
+          fi
 
           cat > "$EVID/RUNTIME_STATUS.txt" <<'EOF'
           emulator_api=36
           package=com.directive.v6
+          runtime_status=PASS
           cold_launch_1_process_survived_10s=PASS
           cold_launch_2_process_survived_10s=PASS
           fatal_runtime_signature=NOT_DETECTED
