@@ -13,6 +13,7 @@ src = Path(sys.argv[1]).read_text(encoding='utf-8')
 
 # Retarget the established D11 startup-surface/runtime-capture build to the next
 # side-by-side package identity without touching inherited Java/JNI class names.
+# Preserve D11's own generator anchor literals so the inner build script remains valid.
 repls = (
     ("('com.directive.v8','com.directive.v11')", "('com.directive.v8','com.directive.v12')"),
     ("('DIRECTIVE_8','DIRECTIVE_11')", "('DIRECTIVE_8','DIRECTIVE_12')"),
@@ -34,7 +35,6 @@ repls = (
     ('candidate=DIRECTIVE 11', 'candidate=DIRECTIVE 12'),
     ('d11_physical_android16_runtime=UNEXECUTED', 'd12_physical_android16_runtime=UNEXECUTED'),
     ('DIRECTIVE11_SHA256_FINAL.txt', 'DIRECTIVE12_SHA256_FINAL.txt'),
-    ("PASS: DIRECTIVE 11 built and statically verified; runtime remains UNEXECUTED and FINAL_GO=false", "PASS: DIRECTIVE 12 converged startup/runtime candidate built and statically verified; runtime remains UNEXECUTED and FINAL_GO=false"),
 )
 for old, new in repls:
     if old not in src:
@@ -93,4 +93,4 @@ grep -Fq '"framework_exception_system_exit_removed": true' out-v12/evidence/DIRE
 
 sha256sum "$APK" | tee out-v12/evidence/DIRECTIVE12_SHA256_FINAL.txt
 echo 'PASS: DIRECTIVE 12 converged source remediation and static package gates complete; Android 16 runtime still required; FINAL_GO=false'
-# workflow trigger marker v31
+# workflow trigger marker v32
