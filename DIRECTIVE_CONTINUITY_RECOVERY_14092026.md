@@ -61,7 +61,7 @@ Locked identities:
 - Phase 1 SHA-256: `d30a725ccecefa01cf480e3ad3a266f61b298357affd5628a5b7934478170c85`
 - disposable EXEC002 Phase 1 test certificate SHA-256: `420a3ce0c50cd0c77aa5633fecbbcb4436145e871f26bc9feae9d6cb15bef81c`
 
-`support/verify_directive_phase1_signer.py` now fails closed if the persisted Phase 1 report changes any locked package/hash/signature identity, loses v2 verification, loses patch/ZIP verification, or incorrectly claims device runtime execution. It can additionally hash-check the exact APK when those bytes are supplied and can verify that an explicitly supplied authorised release certificate is distinct from the disposable Phase 1 test certificate.
+`support/verify_directive_phase1_signer.py` fails closed if the persisted Phase 1 report changes any locked package/hash/signature identity, loses v2 verification, loses patch/ZIP verification, or incorrectly claims device runtime execution. It can additionally hash-check the exact APK when those bytes are supplied and can verify that an explicitly supplied authorised release certificate is distinct from the disposable Phase 1 test certificate.
 
 Executed local verification against the persisted authoritative Phase 1 report:
 
@@ -71,6 +71,29 @@ Executed local verification against the persisted authoritative Phase 1 report:
 - device runtime evidence remains `UNEXECUTED` in the report and is not upgraded by this check
 
 The Phase 1 report explicitly states that the disposable test certificate differs from the DIRECTIVE stable signing identity. The exact authorised stable/release certificate fingerprint has not yet been independently recovered in this recovery run, so production signer continuity remains OPEN rather than inferred.
+
+## Production release signer acceptance gate
+
+`support/verify_directive_release_signer_gate.py` adds an independent fail-closed release-candidate signer gate without introducing or replacing signing material.
+
+The gate requires both:
+
+1. an explicitly supplied authoritative stable/release certificate SHA-256 fingerprint; and
+2. captured output from `apksigner verify --verbose --print-certs` for the exact candidate.
+
+It rejects malformed fingerprints, absence of a successful `Verifies` marker, missing or multiple certificate fingerprints, any signer mismatch, use of the disposable Phase 1 test certificate as the expected production identity, and any candidate actually signed by that disposable test certificate.
+
+Deterministic local fixture verification performed before branch publication:
+
+- matching synthetic stable signer: PASS
+- mismatched signer: correctly rejected
+- Phase 1 disposable signer as candidate: correctly rejected
+- missing successful verification marker: correctly rejected
+- Phase 1 disposable signer configured as production identity: correctly rejected
+
+Result: **5/5 deterministic release-signer gate fixtures PASS**.
+
+This does not recover or assert the production signer fingerprint. It creates the executable acceptance gate that will consume that fingerprint once independently recovered from authoritative evidence. No production key, certificate, keystore, secret, or application byte is stored by this change.
 
 ## Current status
 
@@ -85,6 +108,10 @@ The Phase 1 report explicitly states that the disposable test certificate differ
 `PHASE1_REPORT_CONTINUITY_LOCAL_VERIFY: PASS`
 
 `PHASE1_SIGNER_NEGATIVE_FIXTURE: PASS`
+
+`PRODUCTION_SIGNER_ACCEPTANCE_GATE_IMPLEMENTED: PASS`
+
+`PRODUCTION_SIGNER_ACCEPTANCE_GATE_FIXTURES: 5/5 PASS`
 
 `PHASE1_TEST_CERT_SHA256: 420a3ce0c50cd0c77aa5633fecbbcb4436145e871f26bc9feae9d6cb15bef81c`
 
@@ -104,4 +131,4 @@ The Phase 1 report explicitly states that the disposable test certificate differ
 
 ## Next safe locally executable step
 
-Continue non-destructive release-readiness reconciliation: recover the exact authorised stable/release signer fingerprint and Android 16/package invariants from persisted authoritative evidence, then encode those as fail-closed verification gates. Restore approved icon resources only if their exact bytes and locked provenance are recovered; otherwise keep that subtask blocked.
+Continue non-destructive release-readiness reconciliation. Recover the exact authorised stable/release signer fingerprint from persisted authoritative DIRECTIVE evidence if possible and run it through `support/verify_directive_release_signer_gate.py` against real `apksigner --print-certs` evidence for a stable-signed DIRECTIVE package. Independently continue searching for the exact approved icon bytes/provenance; do not restore or synthesise icon resources without cryptographic authority.
