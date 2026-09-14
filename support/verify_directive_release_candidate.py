@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+PHASE1_TEST_CERT_SHA256 = "420a3ce0c50cd0c77aa5633fecbbcb4436145e871f26bc9feae9d6cb15bef81c"
 PKG_RE = re.compile(
     r"^package:\s+name='([^']+)'\s+versionCode='([^']+)'\s+versionName='([^']*)'",
     re.MULTILINE,
@@ -58,6 +59,8 @@ def main() -> int:
         return fail("expected APK SHA-256 is not 64 hex")
     if not HEX64.fullmatch(expected_cert):
         return fail("expected release certificate SHA-256 is not 64 hex")
+    if expected_cert == PHASE1_TEST_CERT_SHA256:
+        return fail("expected release certificate equals the disposable Phase 1 test certificate")
 
     actual_apk = sha256_file(args.apk)
     if actual_apk != expected_apk:
@@ -101,6 +104,8 @@ def main() -> int:
         return fail(
             f"expected exactly one unique signer certificate SHA-256, found {len(certificates)}"
         )
+    if certificates[0] == PHASE1_TEST_CERT_SHA256:
+        return fail("candidate is signed by the disposable Phase 1 test certificate")
     if certificates[0] != expected_cert:
         return fail(
             f"release signer mismatch: actual={certificates[0]} expected={expected_cert}"
