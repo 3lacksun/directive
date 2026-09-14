@@ -3,6 +3,8 @@ import argparse
 import subprocess
 import sys
 
+PROTECTED_BASE = "67ac7ec4631503ae47caeaf6cae41c5724b57ef4"
+
 PROTECTED_PREFIXES = (
     "sealed-source/",
     "sealed-patch/",
@@ -42,11 +44,40 @@ ALLOWED_ICON_SUFFIXES = (
 )
 
 
-def changed_paths(base: str) -> list[str]:
-    output = subprocess.check_output(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
+def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
         text=True,
+        capture_output=True,
+        check=check,
     )
+
+
+def verify_protected_base(requested_base: str) -> None:
+    if requested_base != PROTECTED_BASE:
+        raise RuntimeError(
+            f"requested base {requested_base!r} does not equal locked protected base {PROTECTED_BASE}"
+        )
+
+    resolved = git("rev-parse", "--verify", f"{PROTECTED_BASE}^{{commit}}").stdout.strip()
+    if resolved != PROTECTED_BASE:
+        raise RuntimeError(
+            f"locked protected base resolves to unexpected commit {resolved}"
+        )
+
+    ancestor = git("merge-base", "--is-ancestor", PROTECTED_BASE, "HEAD", check=False)
+    if ancestor.returncode != 0:
+        raise RuntimeError("locked protected base is not an ancestor of HEAD")
+
+    merge_base = git("merge-base", PROTECTED_BASE, "HEAD").stdout.strip()
+    if merge_base != PROTECTED_BASE:
+        raise RuntimeError(
+            f"unexpected merge-base {merge_base}; expected locked protected base {PROTECTED_BASE}"
+        )
+
+
+def changed_paths() -> list[str]:
+    output = git("diff", "--name-only", f"{PROTECTED_BASE}...HEAD").stdout
     return [line for line in output.splitlines() if line]
 
 
@@ -66,10 +97,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Reject recovery-branch changes outside the DIRECTIVE approved-icon/release-engineering scope."
     )
-    parser.add_argument("--base", required=True, help="Protected baseline commit/ref")
+    parser.add_argument(
+        "--base",
+        default=PROTECTED_BASE,
+        help="Protected baseline commit; must equal the locked Phase 1 recovery base",
+    )
     args = parser.parse_args()
 
-    paths = changed_paths(args.base)
+    try:
+        verify_protected_base(args.base)
+    except (subprocess.CalledProcessError, RuntimeError) as exc:
+        print(f"FAIL: protected-base continuity error: {exc}")
+        return 1
+
+    paths = changed_paths()
     protected_changes = [path for path in paths if is_protected(path)]
     out_of_scope = [path for path in paths if not is_allowed(path)]
 
@@ -80,7 +121,10 @@ def main() -> int:
             print(f" - {path}")
         return 1
 
-    print(f"PASS: {len(paths)} changed path(s) remain inside recovery allowlist")
+    print(
+        f"PASS: locked base {PROTECTED_BASE} is the verified ancestor/merge-base and "
+        f"{len(paths)} changed path(s) remain inside the recovery allowlist"
+    )
     for path in paths:
         print(f" + {path}")
     return 0
