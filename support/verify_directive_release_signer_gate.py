@@ -10,6 +10,11 @@ CERT_PATTERNS = (
     re.compile(r"certificate SHA-256 digest:\s*([0-9A-Fa-f:]{64,95})", re.I),
     re.compile(r"Signer #\d+ certificate SHA-256 digest:\s*([0-9A-Fa-f:]{64,95})", re.I),
 )
+NUMBER_OF_SIGNERS = re.compile(r"^Number of signers:\s*(\d+)\s*$", re.I | re.M)
+SCHEME_PATTERN = re.compile(
+    r"^Verified using v(\d+(?:\.\d+)?) scheme \([^\n]+\):\s*(true|false)\s*$",
+    re.I | re.M,
+)
 
 
 def normalise(value: str) -> str:
@@ -29,6 +34,17 @@ def extract_cert(text: str):
             if HEX64.fullmatch(value):
                 hits.append(value)
     return sorted(set(hits))
+
+
+def verified_modern_scheme(text: str) -> bool:
+    for version, result in SCHEME_PATTERN.findall(text):
+        try:
+            major = int(version.split(".", 1)[0])
+        except ValueError:
+            continue
+        if major >= 2 and result.lower() == "true":
+            return True
+    return False
 
 
 def main() -> int:
@@ -55,13 +71,24 @@ def main() -> int:
         return fail(f"apksigner output not found: {args.apksigner_output}")
 
     text = args.apksigner_output.read_text(encoding="utf-8", errors="replace")
-    if not re.search(r"\bVerifies\b", text):
-        return fail("apksigner output does not contain a successful verification marker")
+    if not re.search(r"^Verifies\s*$", text, re.I | re.M):
+        return fail("apksigner output does not contain the standalone successful verification marker")
+
+    signer_match = NUMBER_OF_SIGNERS.search(text)
+    if not signer_match:
+        return fail("apksigner output does not report Number of signers")
+    signer_count = int(signer_match.group(1))
+    if signer_count != 1:
+        return fail(f"expected exactly one signer, found: {signer_count}")
+
+    if not verified_modern_scheme(text):
+        return fail("candidate is not verified by any APK Signature Scheme v2 or newer")
+
     certs = extract_cert(text)
     if not certs:
         return fail("no valid certificate SHA-256 fingerprint found in apksigner output")
     if len(certs) != 1:
-        return fail("expected exactly one signer certificate, found: " + ",".join(certs))
+        return fail("expected exactly one unique signer certificate, found: " + ",".join(certs))
 
     actual = certs[0]
     if actual == PHASE1_TEST_CERT_SHA256:
